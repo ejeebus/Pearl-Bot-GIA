@@ -358,18 +358,56 @@ test('regex does NOT match unrelated "position" messages', () => {
 // ---------------------------------------------------------------------------
 console.log('\n--- PearlScanner ---');
 const PearlScanner = require('../modules/pearl-scanner');
+const Vec3 = require('vec3');
 
-test('startScanning / stopScanning lifecycle', () => {
+// Build a scanner with a fake world. worldBlocks maps "x,y,z" → block object.
+function makeScanner(worldBlocks = {}, entities = {}) {
   const fakeBot = {
-    entities: {},
-    blockAt: () => null,
+    entities,
     players: {},
+    blockAt: (pos) => {
+      const key = `${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)}`;
+      return worldBlocks[key] ?? null;
+    },
   };
   const fakeConfig = {
-    stasis: { chamber_center: { x: 0, y: 0, z: 0 }, scan_radius: 10, scan_interval_ms: 99999 },
+    stasis: { chamber_center: { x: 0, y: 64, z: 0 }, scan_radius: 8, scan_interval_ms: 99999 },
   };
-  const fakeLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
-  const scanner = new PearlScanner(fakeBot, fakeConfig, fakeLogger);
+  const warns = [];
+  const infos = [];
+  const fakeLogger = {
+    info: (m) => infos.push(m), warn: (m) => warns.push(m),
+    error: () => {}, debug: () => {},
+  };
+  return { scanner: new PearlScanner(fakeBot, fakeConfig, fakeLogger), warns, infos };
+}
+
+// Minimal sign block mock: getSignText() returns [frontText, '']
+function fakeSign(name, frontText, pos) {
+  return { name, position: new Vec3(pos.x, pos.y, pos.z), getSignText: () => [frontText + '\n\n\n', ''] };
+}
+
+function fakeTrapdoor(pos) {
+  return { name: 'oak_trapdoor', position: new Vec3(pos.x, pos.y, pos.z), getProperties: () => ({ open: true }) };
+}
+
+// Build a minimal pearl entity at a given position with a floored().offset() chain
+function fakepearl(id, x, y, z) {
+  const trapdoorPos = new Vec3(x, y + 1, z);
+  return {
+    id,
+    name: 'ender_pearl',
+    metadata: {},
+    position: {
+      x, y, z,
+      floored: () => ({ x, y, z, offset: (dx, dy, dz) => new Vec3(x + dx, y + dy, z + dz) }),
+    },
+    _trapdoorPos: trapdoorPos,
+  };
+}
+
+test('startScanning / stopScanning lifecycle', () => {
+  const { scanner } = makeScanner();
   scanner.startScanning();
   assert.ok(scanner._scanTimer !== null);
   scanner.startScanning(); // double-start is no-op
@@ -378,54 +416,146 @@ test('startScanning / stopScanning lifecycle', () => {
   scanner.stopScanning(); // double-stop safe
 });
 
-test('scan() finds ender pearls within radius and maps to trapdoor', () => {
-  const pearlEntity = {
-    id: 1,
-    name: 'ender_pearl',
-    position: { x: 0, y: 63, z: 0, floored: () => ({ x: 0, y: 63, z: 0, offset: (dx, dy, dz) => ({ x: dx, y: 63 + dy, z: dz }) }) },
-    metadata: {},
+test('scanSigns: sign beside trapdoor (distance 1) maps correctly', () => {
+  // Trapdoor at (0,64,0), sign at (1,64,0)
+  const world = {
+    '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }),
+    '1,64,0': fakeSign('oak_sign', 'Alice', { x: 1, y: 64, z: 0 }),
   };
-  const fakeBot = {
-    entities: { 1: pearlEntity },
-    blockAt: () => ({ name: 'oak_trapdoor' }),
-    players: {},
+  const { scanner } = makeScanner(world);
+  const count = scanner.scanSigns();
+  assert.strictEqual(count, 1);
+  assert.strictEqual(scanner.getSignMap().get('0,64,0'), 'Alice');
+});
+
+test('scanSigns: wall sign above and behind trapdoor (distance 2) maps correctly', () => {
+  // Trapdoor at (0,64,0), sign at (0,65,1) — above and one block back
+  const world = {
+    '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }),
+    '0,65,1': fakeSign('oak_wall_sign', 'Bob', { x: 0, y: 65, z: 1 }),
   };
-  const fakeConfig = {
-    stasis: { chamber_center: { x: 0, y: 63, z: 0 }, scan_radius: 10, scan_interval_ms: 99999 },
+  const { scanner } = makeScanner(world);
+  const count = scanner.scanSigns();
+  assert.strictEqual(count, 1);
+  assert.strictEqual(scanner.getSignMap().get('0,64,0'), 'Bob');
+});
+
+test('scanSigns: sign with no nearby trapdoor is ignored with warning', () => {
+  // Sign at (0,64,0) but no trapdoor anywhere nearby
+  const world = {
+    '0,64,0': fakeSign('oak_sign', 'Orphan', { x: 0, y: 64, z: 0 }),
   };
-  const fakeLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
-  const scanner = new PearlScanner(fakeBot, fakeConfig, fakeLogger);
+  const { scanner, warns } = makeScanner(world);
+  const count = scanner.scanSigns();
+  assert.strictEqual(count, 0);
+  assert.ok(warns.some(w => w.includes('Orphan') && w.includes('no trapdoor')));
+});
+
+test('scanSigns: two signs for same trapdoor — keeps first found, warns on second', () => {
+  const world = {
+    '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }),
+    '1,64,0': fakeSign('oak_sign', 'Alice', { x: 1, y: 64, z: 0 }),
+    '-1,64,0': fakeSign('oak_sign', 'Interloper', { x: -1, y: 64, z: 0 }),
+  };
+  const { scanner, warns } = makeScanner(world);
+  scanner.scanSigns();
+  // Exactly one mapping must exist (whichever sign was scanned first wins)
+  assert.strictEqual(scanner.getSignMap().size, 1);
+  // The loser must have triggered a conflict warning
+  assert.ok(warns.some(w => w.includes('same trapdoor')), `expected conflict warning, got: ${warns}`);
+});
+
+test('scanSigns: sign with only whitespace is ignored', () => {
+  const world = {
+    '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }),
+    '1,64,0': fakeSign('oak_sign', '   ', { x: 1, y: 64, z: 0 }),
+  };
+  const { scanner } = makeScanner(world);
+  const count = scanner.scanSigns();
+  assert.strictEqual(count, 0);
+});
+
+test('scanSigns: uses first non-empty line as player name', () => {
+  // getSignText returns front text with \n-separated lines
+  const block = {
+    name: 'oak_sign',
+    position: new Vec3(1, 64, 0),
+    getSignText: () => ['\n  \nCharlie\nIgnored', ''],
+  };
+  const world = {
+    '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }),
+    '1,64,0': block,
+  };
+  const { scanner } = makeScanner(world);
+  scanner.scanSigns();
+  assert.strictEqual(scanner.getSignMap().get('0,64,0'), 'Charlie');
+});
+
+test('scan() resolves pearl owner via sign map', () => {
+  // Pearl at (0,63,0) → trapdoor at (0,64,0) → sign says "Alice"
+  const pearl = fakepearl(1, 0, 63, 0);
+  const world = {
+    '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }),
+    '1,64,0': fakeSign('oak_sign', 'Alice', { x: 1, y: 64, z: 0 }),
+  };
+  const { scanner } = makeScanner(world, { 1: pearl });
+  scanner.scanSigns();
   const results = scanner.scan();
   assert.strictEqual(results.length, 1);
-  assert.ok(results[0].playerName.startsWith('__pearl_'));
+  assert.strictEqual(results[0].playerName, 'Alice');
+});
+
+test('scan() falls back to __pearl_id when no sign and no metadata', () => {
+  const pearl = fakepearl(7, 0, 63, 0);
+  const world = { '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }) };
+  const { scanner } = makeScanner(world, { 7: pearl });
+  // No signs scanned
+  const results = scanner.scan();
+  assert.strictEqual(results.length, 1);
+  assert.strictEqual(results[0].playerName, '__pearl_7');
+});
+
+test('getPearlForPlayer works after sign-based resolution (case-insensitive)', () => {
+  const pearl = fakepearl(1, 0, 63, 0);
+  const world = {
+    '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }),
+    '1,64,0': fakeSign('oak_sign', 'Alice', { x: 1, y: 64, z: 0 }),
+  };
+  const { scanner } = makeScanner(world, { 1: pearl });
+  scanner.scanSigns();
+  scanner._update(); // populates _knownPearls
+  const result = scanner.getPearlForPlayer('alice'); // lowercase
+  assert.ok(result !== null);
+  assert.strictEqual(result.playerName, 'Alice');
 });
 
 test('scan() skips pearls outside radius', () => {
-  const pearlEntity = {
-    id: 2,
-    name: 'ender_pearl',
-    position: { x: 999, y: 63, z: 999, floored: () => ({ x: 999, y: 63, z: 999, offset: () => ({ x: 999, y: 64, z: 999 }) }) },
-    metadata: {},
-  };
-  const fakeBot = {
-    entities: { 2: pearlEntity },
-    blockAt: () => ({ name: 'oak_trapdoor' }),
-    players: {},
-  };
-  const fakeConfig = {
-    stasis: { chamber_center: { x: 0, y: 63, z: 0 }, scan_radius: 10, scan_interval_ms: 99999 },
-  };
-  const fakeLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
-  const scanner = new PearlScanner(fakeBot, fakeConfig, fakeLogger);
+  const pearl = fakepearl(2, 999, 63, 999);
+  const world = { '999,64,999': fakeTrapdoor({ x: 999, y: 64, z: 999 }) };
+  const { scanner } = makeScanner(world, { 2: pearl });
   assert.strictEqual(scanner.scan().length, 0);
 });
 
 test('getPearlForPlayer returns null when no pearls tracked', () => {
-  const fakeBot = { entities: {}, blockAt: () => null, players: {} };
-  const fakeConfig = { stasis: { chamber_center: { x:0,y:0,z:0 }, scan_radius: 10, scan_interval_ms: 99999 } };
-  const fakeLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
-  const scanner = new PearlScanner(fakeBot, fakeConfig, fakeLogger);
+  const { scanner } = makeScanner();
   assert.strictEqual(scanner.getPearlForPlayer('NoOne'), null);
+});
+
+test('multiple chambers: each sign maps to correct trapdoor', () => {
+  // Two independent stasis slots at z=0 and z=4
+  const pearl1 = fakepearl(1, 0, 63, 0);
+  const pearl2 = fakepearl(2, 0, 63, 4);
+  const world = {
+    '0,64,0': fakeTrapdoor({ x: 0, y: 64, z: 0 }),
+    '1,64,0': fakeSign('oak_sign', 'Alice', { x: 1, y: 64, z: 0 }),
+    '0,64,4': fakeTrapdoor({ x: 0, y: 64, z: 4 }),
+    '1,64,4': fakeSign('oak_sign', 'Bob', { x: 1, y: 64, z: 4 }),
+  };
+  const { scanner } = makeScanner(world, { 1: pearl1, 2: pearl2 });
+  scanner.scanSigns();
+  const results = scanner.scan();
+  const names = results.map(r => r.playerName).sort();
+  assert.deepStrictEqual(names, ['Alice', 'Bob']);
 });
 
 // ---------------------------------------------------------------------------

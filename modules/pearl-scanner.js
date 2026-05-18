@@ -2,27 +2,32 @@
  * PearlScanner - Scans for ender pearl entities in the stasis chamber
  * and maps them to their controlling trapdoor positions.
  *
- * In a stasis chamber, ender pearls are suspended in bubble columns or water.
- * A trapdoor directly above each pearl keeps it suspended. When the trapdoor
- * is closed (opened == false), the pearl falls and the owner teleports.
+ * Pearl ownership is resolved by reading signs placed adjacent to each
+ * stasis slot. Signs must be within Manhattan distance 3 of their
+ * trapdoor; the first non-empty line of the sign is treated as the
+ * player name. Call scanSigns() once after the bot spawns near the
+ * chamber, or whenever signs are added/changed.
  *
  * Events:
  *   'pearl-found'  ({ entity, blockPos, playerName })
- *       - Emitted when a new pearl is detected or an existing pearl changes position.
  *   'pearl-lost'   (playerName)
- *       - Emitted when a previously tracked pearl disappears from scans.
  */
 
 const EventEmitter = require('events');
+const Vec3 = require('vec3');
+
+// Max Manhattan distance from a sign block to its associated trapdoor.
+const SIGN_TRAPDOOR_RADIUS = 3;
 
 class PearlScanner extends EventEmitter {
   /**
-   * @param {import('mineflayer').Bot} bot - Mineflayer bot instance
-   * @param {object} config - Bot configuration
-   * @param {object} config.stasis - Stasis chamber config
-   * @param {{x:number,y:number,z:number}} config.stasis.chamber_center - Center of the chamber
-   * @param {number} config.stasis.scan_radius - Max distance from center to scan for pearls
-   * @param {number} config.stasis.scan_interval_ms - Interval between automatic scans
+   * @param {import('mineflayer').Bot} bot
+   * @param {object} config
+   * @param {object} config.stasis
+   * @param {{x:number,y:number,z:number}} config.stasis.chamber_center
+   * @param {number} config.stasis.scan_radius
+   * @param {number} config.stasis.scan_interval_ms
+   * @param {import('./logger')} logger
    */
   constructor(bot, config, logger) {
     super();
@@ -32,34 +37,80 @@ class PearlScanner extends EventEmitter {
     this._scanTimer = null;
     /** @type {Map<string, {entity: object, blockPos: import('vec3').Vec3}>} */
     this._knownPearls = new Map();
+    /** trapdoor position key → player name, built by scanSigns() */
+    this._signMap = new Map();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public API
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Scan blocks in the chamber area for signs, find the nearest trapdoor to
+   * each sign, and store the mapping. Call this after the bot spawns near the
+   * chamber and again whenever signs are added or changed.
+   *
+   * @returns {number} Number of sign→trapdoor mappings found
+   */
+  scanSigns() {
+    const { chamber_center: cc, scan_radius: r } = this.config.stasis;
+    const newMap = new Map();
+
+    for (let x = Math.floor(cc.x - r); x <= Math.ceil(cc.x + r); x++) {
+      for (let y = Math.floor(cc.y - r); y <= Math.ceil(cc.y + r); y++) {
+        for (let z = Math.floor(cc.z - r); z <= Math.ceil(cc.z + r); z++) {
+          const block = this.bot.blockAt(new Vec3(x, y, z));
+          if (!block || !block.name.includes('sign')) continue;
+
+          const playerName = this._readSignName(block);
+          if (!playerName) continue;
+
+          const trapdoor = this._findNearestTrapdoor(new Vec3(x, y, z));
+          if (!trapdoor) {
+            this.logger.warn(
+              `Sign for "${playerName}" at ${x},${y},${z} has no trapdoor within ${SIGN_TRAPDOOR_RADIUS} blocks`
+            );
+            continue;
+          }
+
+          const key = posKey(trapdoor.position);
+          if (newMap.has(key)) {
+            this.logger.warn(
+              `Two signs map to the same trapdoor at ${key} — keeping first ("${newMap.get(key)}"), ignoring "${playerName}"`
+            );
+            continue;
+          }
+
+          newMap.set(key, playerName);
+          this.logger.info(
+            `Mapped "${playerName}" → trapdoor at ${key}`
+          );
+        }
+      }
+    }
+
+    this._signMap = newMap;
+    this.logger.info(`Sign scan complete: ${newMap.size} slot(s) mapped`);
+    return newMap.size;
   }
 
   /**
    * Scan all loaded entities for ender pearls within the configured radius,
    * map each to its controlling trapdoor, and resolve the owning player.
-   *
-   * @returns {Array<{entity: object, blockPos: import('vec3').Vec3, playerName: string}>}
    */
   scan() {
-    const cx = this.config.stasis.chamber_center.x;
-    const cy = this.config.stasis.chamber_center.y;
-    const cz = this.config.stasis.chamber_center.z;
-    const radiusSq = this.config.stasis.scan_radius ** 2;
-
+    const { chamber_center: cc, scan_radius: r } = this.config.stasis;
+    const radiusSq = r ** 2;
     const pearls = [];
 
     for (const entity of Object.values(this.bot.entities)) {
-      // Filter: only ender pearl projectiles (Minecraft 1.21.4)
       if (entity.name !== 'ender_pearl') continue;
 
-      // Filter: within configured chamber radius
-      const dx = entity.position.x - cx;
-      const dy = entity.position.y - cy;
-      const dz = entity.position.z - cz;
-      const distSq = dx * dx + dy * dy + dz * dz;
-      if (distSq > radiusSq) continue;
+      const dx = entity.position.x - cc.x;
+      const dy = entity.position.y - cc.y;
+      const dz = entity.position.z - cc.z;
+      if (dx * dx + dy * dy + dz * dz > radiusSq) continue;
 
-      // Block position directly above the pearl — this is where the trapdoor should be
       const blockPos = entity.position.floored().offset(0, 1, 0);
       const block = this.bot.blockAt(blockPos);
 
@@ -70,9 +121,7 @@ class PearlScanner extends EventEmitter {
         continue;
       }
 
-      // Resolve which player owns this pearl
-      const playerName = this._resolvePearlOwner(entity);
-
+      const playerName = this._resolvePearlOwner(entity, blockPos);
       pearls.push({ entity, blockPos, playerName });
     }
 
@@ -80,104 +129,19 @@ class PearlScanner extends EventEmitter {
   }
 
   /**
-   * Try to determine which player owns an ender pearl.
-   *
-   * Resolution strategies (in order):
-   *   1. Look for owner UUID in entity metadata and cross-reference bot.players
-   *   2. Look for thrower entity ID in metadata and resolve via bot.entities
-   *   3. Reuse a previously known name for the same entity.id
-   *   4. Fall back to a unique internal identifier
-   *
-   * @param {object} entity - Mineflayer entity object
-   * @returns {string} Player name or fallback identifier
-   */
-  _resolvePearlOwner(entity) {
-    // Strategy 1: UUID in entity metadata → bot.players lookup
-    try {
-      const meta = entity.metadata;
-      if (meta) {
-        for (const val of Object.values(meta)) {
-          // Full UUID string format: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-          if (typeof val === 'string' && val.length === 36 && val.includes('-')) {
-            const cleaned = val.replace(/-/g, '').toLowerCase();
-            if (/^[0-9a-f]{32}$/.test(cleaned)) {
-              const found = this._findPlayerByUUID(cleaned);
-              if (found) return found;
-            }
-          }
-
-          // UUID as int[] array of 4 x int32
-          if (Array.isArray(val) && val.length === 4 &&
-              val.every((n) => typeof n === 'number')) {
-            const hex = val
-              .map((n) => (n >>> 0).toString(16).padStart(8, '0'))
-              .join('');
-            const found = this._findPlayerByUUID(hex);
-            if (found) return found;
-          }
-        }
-
-        // Strategy 2: thrower entity ID at common metadata indices
-        const throwerId = meta[8] ?? meta[7];
-        if (typeof throwerId === 'number' && throwerId > 0) {
-          const thrower = this.bot.entities[throwerId];
-          if (thrower && thrower.type === 'player' && thrower.username) {
-            return thrower.username;
-          }
-        }
-      }
-    } catch {
-      // Silently continue to next strategy
-    }
-
-    // Strategy 3: if we already tracked this entity, reuse the previous name
-    for (const [name, info] of this._knownPearls) {
-      if (info.entity.id === entity.id) {
-        return name;
-      }
-    }
-
-    // Strategy 4 (fallback): unique internal identifier
-    return `__pearl_${entity.id}`;
-  }
-
-  /**
-   * Find a player name by their Mojang UUID (dashless).
-   * @param {string} uuid - 32-character hex UUID (no dashes)
-   * @returns {string|null} Player name, or null if not found
-   */
-  _findPlayerByUUID(uuid) {
-    for (const [username, player] of Object.entries(this.bot.players)) {
-      if (!player.uuid) continue;
-      const pu = player.uuid.replace(/-/g, '').toLowerCase();
-      if (pu === uuid) return username;
-    }
-    return null;
-  }
-
-  /**
-   * Start periodic pearl scanning at the configured interval.
-   * Performs an immediate scan on call.
+   * Start periodic pearl scanning. Runs an immediate sign scan and pearl scan.
    */
   startScanning() {
     if (this._scanTimer) return;
 
-    // Immediate scan
+    this.scanSigns();
     this._update();
 
-    // Recurring scan
     const interval = this.config.stasis.scan_interval_ms;
     this._scanTimer = setInterval(() => this._update(), interval);
-
-    // Allow the process to exit if this timer is the only thing keeping it alive
-    if (this._scanTimer.unref) {
-      this._scanTimer.unref();
-    }
+    if (this._scanTimer.unref) this._scanTimer.unref();
   }
 
-  /**
-   * Stop periodic pearl scanning.
-   */
   stopScanning() {
     if (this._scanTimer) {
       clearInterval(this._scanTimer);
@@ -186,14 +150,38 @@ class PearlScanner extends EventEmitter {
   }
 
   /**
-   * Internal update cycle: runs scan(), diffs against known pearls,
-   * and emits 'pearl-found' / 'pearl-lost' events as appropriate.
+   * Get pearl info for a named player.
+   * @returns {{entity, blockPos, trapdoorBlock, playerName}|null}
    */
+  getPearlForPlayer(playerName) {
+    const lower = playerName.toLowerCase();
+    for (const [name, info] of this._knownPearls) {
+      if (name.toLowerCase() === lower) {
+        const trapdoorBlock = this.bot.blockAt(info.blockPos);
+        return { entity: info.entity, blockPos: info.blockPos, trapdoorBlock, playerName: name };
+      }
+    }
+    return null;
+  }
+
+  /** @returns {Map} Shallow copy of all currently tracked pearls */
+  getKnownPearls() {
+    return new Map(this._knownPearls);
+  }
+
+  /** @returns {Map} Shallow copy of the current sign→trapdoor map */
+  getSignMap() {
+    return new Map(this._signMap);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Internal
+  // ---------------------------------------------------------------------------
+
   _update() {
     const current = this.scan();
     const currentKeys = new Set(current.map((p) => p.playerName));
 
-    // Detect lost pearls
     for (const [name] of this._knownPearls) {
       if (!currentKeys.has(name)) {
         this._knownPearls.delete(name);
@@ -201,7 +189,6 @@ class PearlScanner extends EventEmitter {
       }
     }
 
-    // Detect new pearls or moved pearls
     for (const pearl of current) {
       const prev = this._knownPearls.get(pearl.playerName);
       const isNew = !prev;
@@ -215,29 +202,122 @@ class PearlScanner extends EventEmitter {
   }
 
   /**
-   * Get the pearl info for a specific player.
+   * Resolve which player owns a given pearl entity.
    *
-   * @param {string} playerName - The Minecraft player name
-   * @returns {{entity: object, blockPos: import('vec3').Vec3}|null} Pearl info or null
+   * Resolution order:
+   *   1. Sign map  — trapdoor position looked up in pre-built sign→trapdoor table
+   *   2. UUID metadata  — entity metadata cross-referenced with bot.players tab-list
+   *   3. Thrower entity  — metadata entity-ID reference resolved via bot.entities
+   *   4. Previously known  — same entity.id seen in a prior scan
+   *   5. Fallback  — __pearl_<entity_id>
+   *
+   * @param {object} entity
+   * @param {import('vec3').Vec3} trapdoorPos
+   * @returns {string}
    */
-  getPearlForPlayer(playerName) {
-    const lower = playerName.toLowerCase();
-    for (const [name, info] of this._knownPearls) {
-      if (name.toLowerCase() === lower) {
-        const trapdoorBlock = this.bot.blockAt(info.blockPos);
-        return { entity: info.entity, blockPos: info.blockPos, trapdoorBlock, playerName: name };
-      }
+  _resolvePearlOwner(entity, trapdoorPos) {
+    // Strategy 1: sign map
+    if (trapdoorPos) {
+      const name = this._signMap.get(posKey(trapdoorPos));
+      if (name) return name;
     }
-    return null;
+
+    // Strategy 2 & 3: entity metadata
+    try {
+      const meta = entity.metadata;
+      if (meta) {
+        for (const val of Object.values(meta)) {
+          if (typeof val === 'string' && val.length === 36 && val.includes('-')) {
+            const cleaned = val.replace(/-/g, '').toLowerCase();
+            if (/^[0-9a-f]{32}$/.test(cleaned)) {
+              const found = this._findPlayerByUUID(cleaned);
+              if (found) return found;
+            }
+          }
+          if (Array.isArray(val) && val.length === 4 && val.every((n) => typeof n === 'number')) {
+            const hex = val.map((n) => (n >>> 0).toString(16).padStart(8, '0')).join('');
+            const found = this._findPlayerByUUID(hex);
+            if (found) return found;
+          }
+        }
+
+        const throwerId = meta[8] ?? meta[7];
+        if (typeof throwerId === 'number' && throwerId > 0) {
+          const thrower = this.bot.entities[throwerId];
+          if (thrower?.type === 'player' && thrower.username) return thrower.username;
+        }
+      }
+    } catch {
+      // metadata structure varies — fall through
+    }
+
+    // Strategy 4: previously known
+    for (const [name, info] of this._knownPearls) {
+      if (info.entity.id === entity.id) return name;
+    }
+
+    // Strategy 5: fallback
+    return `__pearl_${entity.id}`;
   }
 
   /**
-   * Get a shallow copy of all currently tracked pearls.
-   * @returns {Map<string, {entity: object, blockPos: import('vec3').Vec3}>}
+   * Read the first non-empty line from a sign block as the player name.
+   * Returns null if the block has no entity data or all lines are empty.
    */
-  getKnownPearls() {
-    return new Map(this._knownPearls);
+  _readSignName(block) {
+    try {
+      const texts = block.getSignText();
+      // texts[0] = front face text (lines joined with \n)
+      const front = texts[0] || '';
+      const name = front.split('\n').map(l => l.trim()).find(l => l.length > 0);
+      return name || null;
+    } catch {
+      return null;
+    }
   }
+
+  /**
+   * Find the nearest trapdoor block to a given position within
+   * SIGN_TRAPDOOR_RADIUS (Manhattan distance).
+   *
+   * @param {import('vec3').Vec3} origin
+   * @returns {import('prismarine-block').Block|null}
+   */
+  _findNearestTrapdoor(origin) {
+    let best = null;
+    let bestDist = Infinity;
+    const R = SIGN_TRAPDOOR_RADIUS;
+
+    for (let dx = -R; dx <= R; dx++) {
+      for (let dy = -R; dy <= R; dy++) {
+        for (let dz = -R; dz <= R; dz++) {
+          const dist = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+          if (dist === 0 || dist > R) continue;
+          const block = this.bot.blockAt(origin.offset(dx, dy, dz));
+          if (!block || !block.name.includes('trapdoor')) continue;
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = block;
+          }
+        }
+      }
+    }
+
+    return best;
+  }
+
+  _findPlayerByUUID(uuid) {
+    for (const [username, player] of Object.entries(this.bot.players)) {
+      if (!player.uuid) continue;
+      const pu = player.uuid.replace(/-/g, '').toLowerCase();
+      if (pu === uuid) return username;
+    }
+    return null;
+  }
+}
+
+function posKey(pos) {
+  return `${pos.x},${pos.y},${pos.z}`;
 }
 
 module.exports = PearlScanner;
