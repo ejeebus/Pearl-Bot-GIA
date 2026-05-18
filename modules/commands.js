@@ -48,13 +48,12 @@ class CommandHandler extends EventEmitter {
     const command = this._parseCommand(msg, sender);
     if (!command) return;
 
-    this.logger.info(
-      `Chat command from ${command.sender}: !pearl ${command.target}`
-    );
+    const cmdDesc = command.action === 'rescan' ? 'rescan' : `load ${command.target}`;
+    this.logger.info(`Chat command from ${command.sender}: !pearl ${cmdDesc}`);
 
     if (!this.whitelist.isAuthorized(command.sender)) {
       this.logger.warn(
-        `Unauthorized !pearl attempt by ${command.sender} (target: ${command.target})`
+        `Unauthorized !pearl attempt by ${command.sender} (${cmdDesc})`
       );
       return;
     }
@@ -62,6 +61,14 @@ class CommandHandler extends EventEmitter {
     const now = Date.now();
     if (now - this._lastChatTime < this._minChatInterval) {
       this.logger.debug(`Rate limited — skipping response to ${command.sender}`);
+      return;
+    }
+
+    if (command.action === 'rescan') {
+      const count = this.pearlScanner.scanSigns();
+      this.bot.chat(`Rescan complete: ${count} slot(s) mapped`);
+      this._lastChatTime = now;
+      this.logger.info(`Sign rescan triggered by ${command.sender}: ${count} slot(s) mapped`);
       return;
     }
 
@@ -144,12 +151,13 @@ class CommandHandler extends EventEmitter {
    *   !pearl <name>              → load pearl for named player
    *   !pearl load                → load sender's own pearl
    *   !pearl load <name>         → load pearl for named player
+   *   !pearl rescan              → re-scan signs in the chamber area
    *   !loadpearl                 → load sender's own pearl
    *   !loadpearl <name>          → load pearl for named player
    *
    * @param {string} msg  - Raw message text
    * @param {string} sender - Sender username (fallback when no target given)
-   * @returns {{ sender: string, target: string } | null}
+   * @returns {{ sender: string, target: string } | { sender: string, action: 'rescan' } | null}
    */
   _parseCommand(msg, sender) {
     if (typeof msg !== "string") return null;
@@ -162,6 +170,10 @@ class CommandHandler extends EventEmitter {
     // !pearl (no args — target self)
     match = text.match(/^!pearl\s*$/i);
     if (match) return { sender, target: sender };
+
+    // !pearl rescan — must be checked before the generic !pearl <name> catch-all
+    match = text.match(/^!pearl\s+rescan\s*$/i);
+    if (match) return { sender, action: 'rescan' };
 
     // !pearl load [playerName]
     match = text.match(/^!pearl\s+load(?:\s+(.+))?$/i);

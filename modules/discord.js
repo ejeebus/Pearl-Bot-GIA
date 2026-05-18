@@ -161,11 +161,10 @@ class DiscordBot {
     const prefix = this.config.discord.prefix || "!pearl";
     if (!message.content.startsWith(prefix)) return;
 
-    // Parse target
     const args = message.content.slice(prefix.length).trim().split(/\s+/);
-    const targetPlayer = args[0];
+    const subcommand = args[0]?.toLowerCase();
 
-    if (!targetPlayer) {
+    if (!subcommand) {
       await this._sendUsage(message, prefix);
       return;
     }
@@ -174,17 +173,54 @@ class DiscordBot {
     const discordName = message.member?.nickname || message.author.username;
     if (!this._isDiscordAuthorized(discordName)) {
       this.logger.warn(
-        `Unauthorized pearl request by "${discordName}" (id: ${message.author.id}) for "${targetPlayer}"`,
+        `Unauthorized request by "${discordName}" (id: ${message.author.id}): ${subcommand}`,
       );
       await this._sendDenied(message);
       return;
     }
 
-    this.logger.info(
-      `Pearl request: "${discordName}" → "${targetPlayer}"`,
-    );
+    if (subcommand === 'rescan') {
+      await this._processRescan(message, discordName);
+      return;
+    }
 
-    await this._processPearlRequest(message, targetPlayer, discordName);
+    // args[0] used directly to preserve original casing for the player name
+    this.logger.info(`Pearl request: "${discordName}" → "${args[0]}"`);
+    await this._processPearlRequest(message, args[0], discordName);
+  }
+
+  /**
+   * Re-scan the chamber for signs and report results.
+   */
+  async _processRescan(message, requesterName) {
+    if (!this.pearlScanner) {
+      await message.channel.send({
+        embeds: [new EmbedBuilder().setColor(COLORS.ERROR).setTitle('Error')
+          .setDescription('Pearl scanner is not available yet — bot may still be connecting.')],
+      });
+      return;
+    }
+    try {
+      const count = this.pearlScanner.scanSigns();
+      const slotList = count > 0
+        ? [...this.pearlScanner.getSignMap().values()].map(n => `• ${n}`).join('\n')
+        : '_None_';
+      const embed = new EmbedBuilder()
+        .setColor(COLORS.SUCCESS)
+        .setTitle('Rescan Complete')
+        .setDescription(`Found **${count}** pearl slot(s).`)
+        .addFields({ name: 'Mapped Players', value: slotList })
+        .setFooter({ text: `Requested by ${requesterName}` })
+        .setTimestamp();
+      await message.channel.send({ embeds: [embed] });
+      this.logger.info(`Sign rescan by "${requesterName}": ${count} slot(s) mapped`);
+    } catch (err) {
+      this.logger.error(`Rescan failed: ${err.message}`);
+      await message.channel.send({
+        embeds: [new EmbedBuilder().setColor(COLORS.ERROR).setTitle('Rescan Failed')
+          .setDescription(`\`${err.message}\``)],
+      });
+    }
   }
 
   /**
@@ -225,10 +261,9 @@ class DiscordBot {
     const embed = new EmbedBuilder()
       .setColor(COLORS.INFO)
       .setTitle("Pearl Bot — Usage")
-      .setDescription(
-        `\`${prefix} <MinecraftUsername>\`\n\n` +
-          "Request a stasis pearl load for the specified player. " +
-          "The bot will find their pearl in the chamber and trigger the trapdoor mechanism.",
+      .addFields(
+        { name: `${prefix} <MinecraftUsername>`, value: 'Load a stasis pearl for the named player.' },
+        { name: `${prefix} rescan`, value: 'Re-scan the chamber for signs and rebuild the slot map.' },
       );
     await message.channel.send({ embeds: [embed] });
   }

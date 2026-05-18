@@ -154,9 +154,66 @@ test('_parseCommand: !loadpearl Bob', () => {
   assert.deepStrictEqual(r, { sender: 'Alice', target: 'Bob' });
 });
 
+test('_parseCommand: !pearl rescan', () => {
+  const h = makeCommandHandler();
+  const r = h._parseCommand('<Alice> !pearl rescan', 'Alice');
+  assert.deepStrictEqual(r, { sender: 'Alice', action: 'rescan' });
+});
+
+test('_parseCommand: !pearl rescan (case-insensitive)', () => {
+  const h = makeCommandHandler();
+  const r = h._parseCommand('<Alice> !pearl RESCAN', 'Alice');
+  assert.deepStrictEqual(r, { sender: 'Alice', action: 'rescan' });
+});
+
+test('_parseCommand: "rescan" treated as player name via !pearl load rescan', () => {
+  // !pearl load rescan → loads pearl for player named "rescan"
+  const h = makeCommandHandler();
+  const r = h._parseCommand('<Alice> !pearl load rescan', 'Alice');
+  assert.deepStrictEqual(r, { sender: 'Alice', target: 'rescan' });
+});
+
 test('_parseCommand: unrelated message → null', () => {
   const h = makeCommandHandler();
   assert.strictEqual(h._parseCommand('<Alice> hello world', 'Alice'), null);
+});
+
+test('!pearl rescan triggers scanSigns and reports count', async () => {
+  const chatted = [];
+  const rescanned = [];
+  const fakeBot = { on: () => {}, removeListener: () => {}, chat: (m) => chatted.push(m) };
+  const fakeWhitelist = new WhitelistManager({ whitelist: ['Alice'] });
+  const fakePearl = { scanSigns: () => { rescanned.push(1); return 3; }, getPearlForPlayer: () => null };
+  const fakeTrapdoor = { loadPearl: async () => true };
+  const fakeLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+
+  const h = new CommandHandler(fakeBot, fakeWhitelist, fakePearl, fakeTrapdoor, fakeLogger);
+  h.start();
+  h._handleChat('<Alice> !pearl rescan', null, null);
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert.strictEqual(rescanned.length, 1, 'scanSigns should be called once');
+  assert.ok(chatted.some(m => m.includes('3') && m.includes('slot')), `unexpected chat: ${chatted}`);
+  h.stop();
+});
+
+test('!pearl rescan blocked for unauthorized player', async () => {
+  const chatted = [];
+  const rescanned = [];
+  const fakeBot = { on: () => {}, removeListener: () => {}, chat: (m) => chatted.push(m) };
+  const fakeWhitelist = new WhitelistManager({ whitelist: ['Alice'] });
+  const fakePearl = { scanSigns: () => { rescanned.push(1); return 0; }, getPearlForPlayer: () => null };
+  const fakeTrapdoor = { loadPearl: async () => true };
+  const fakeLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+
+  const h = new CommandHandler(fakeBot, fakeWhitelist, fakePearl, fakeTrapdoor, fakeLogger);
+  h.start();
+  h._handleChat('<Eve> !pearl rescan', null, null);
+  await new Promise((r) => setTimeout(r, 50));
+
+  assert.strictEqual(rescanned.length, 0, 'unauthorized player should not trigger rescan');
+  assert.strictEqual(chatted.length, 0);
+  h.stop();
 });
 
 test('whitelist checked before rate limit', async () => {
