@@ -80,8 +80,8 @@ function bindModules(bot) {
   if (antiAfk) antiAfk.stop();
   if (queueHandler) queueHandler.stop();
 
-  pearlScanner = new PearlScanner(bot, config);
-  trapdoorController = new TrapdoorController(bot);
+  pearlScanner = new PearlScanner(bot, config, logger);
+  trapdoorController = new TrapdoorController(bot, logger);
   commandHandler = new CommandHandler(bot, whitelist, pearlScanner, trapdoorController, logger);
   antiAfk = new AntiAFK(bot, config.anti_afk, logger);
 
@@ -104,6 +104,7 @@ function setupQueueHandler(bot) {
 
   queueHandler.on('reconnected', (newBot) => {
     logger.info('Reconnected — rebinding modules to new bot instance');
+    currentBot = newBot;
     bindModules(newBot);
   });
 
@@ -125,6 +126,7 @@ function cleanup() {
   if (currentBot && !shutdownRequested) {
     try { currentBot.quit('Graceful shutdown'); } catch {}
   }
+  logger.close();
 }
 
 process.on('SIGINT', () => {

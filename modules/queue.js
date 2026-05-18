@@ -202,7 +202,7 @@ class QueueHandler extends EventEmitter {
    * 2b2t queue positions appear as "Position in queue: 42" or "Your position is #13"
    */
   _onChatMessage(message) {
-    const match = message.match(/position.*?#?(\d+)/i);
+    const match = message.match(/(?:position in queue|queue position|your position)[:\s]+(?:is\s+)?#?(\d+)/i);
     if (match) {
       const position = parseInt(match[1], 10);
       this.logger.chat(`Queue position: #${position}`);

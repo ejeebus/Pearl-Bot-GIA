@@ -24,10 +24,11 @@ class PearlScanner extends EventEmitter {
    * @param {number} config.stasis.scan_radius - Max distance from center to scan for pearls
    * @param {number} config.stasis.scan_interval_ms - Interval between automatic scans
    */
-  constructor(bot, config) {
+  constructor(bot, config, logger) {
     super();
     this.bot = bot;
     this.config = config;
+    this.logger = logger;
     this._scanTimer = null;
     /** @type {Map<string, {entity: object, blockPos: import('vec3').Vec3}>} */
     this._knownPearls = new Map();
@@ -63,9 +64,8 @@ class PearlScanner extends EventEmitter {
       const block = this.bot.blockAt(blockPos);
 
       if (!block || !block.name.includes('trapdoor')) {
-        console.warn(
-          `[PearlScanner] No trapdoor found above pearl at ${blockPos}` +
-          ` (entity ${entity.id})`
+        this.logger.warn(
+          `No trapdoor found above pearl at ${blockPos} (entity ${entity.id})`
         );
         continue;
       }
