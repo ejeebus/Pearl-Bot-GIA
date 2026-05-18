@@ -328,6 +328,85 @@ test('toggleTrapdoor: close → wait → reopen sequence', async () => {
   resultPromise.then(() => {}).catch(() => {}); // discard
 });
 
+// ---------------------------------------------------------------------------
+// Navigator
+// ---------------------------------------------------------------------------
+console.log('\n--- Navigator ---');
+const Navigator = require('../modules/navigator');
+
+// Fake Movements and GoalNear so tests don't need a real mineflayer bot registry
+class FakeMovements { constructor() { this.allowParkour = true; this.allowSprinting = true; } }
+class FakeGoalNear { constructor(x, y, z, r) { this.x = x; this.y = y; this.z = z; this.r = r; } }
+const fakeDeps = { Movements: FakeMovements, GoalNear: FakeGoalNear };
+
+function makeNavigatorBot(botPos, gotoFn = async () => {}) {
+  const pluginsLoaded = [];
+  return {
+    entity: { position: botPos },
+    loadPlugin: (p) => pluginsLoaded.push(p),
+    pathfinder: {
+      setMovements: () => {},
+      goto: gotoFn,
+      stop: () => {},
+    },
+    _pluginsLoaded: pluginsLoaded,
+  };
+}
+
+const fakeNavConfig = {
+  stasis: { chamber_center: { x: 100, y: 64, z: 200 }, scan_radius: 10, scan_interval_ms: 99999 },
+};
+const silentLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+
+test('goToChamber: skips navigation when already within arrival radius', async () => {
+  const fakeBot = makeNavigatorBot({ x: 101, y: 64, z: 200 }); // 1 block away
+  let gotoCalled = false;
+  fakeBot.pathfinder.goto = async () => { gotoCalled = true; };
+  const nav = new Navigator(fakeBot, fakeNavConfig, silentLogger, fakeDeps);
+  await nav.goToChamber();
+  assert.ok(!gotoCalled, 'goto should not be called when already at chamber');
+});
+
+test('goToChamber: calls pathfinder.goto when outside radius', async () => {
+  const goals = [];
+  const fakeBot = makeNavigatorBot({ x: 0, y: 64, z: 0 }, async (goal) => goals.push(goal));
+  const nav = new Navigator(fakeBot, fakeNavConfig, silentLogger, fakeDeps);
+  await nav.goToChamber(3);
+  assert.strictEqual(goals.length, 1, 'goto should be called once');
+  assert.strictEqual(goals[0].x, 100);
+  assert.strictEqual(goals[0].y, 64);
+  assert.strictEqual(goals[0].z, 200);
+});
+
+test('goToChamber: custom arrival radius is respected', async () => {
+  // 8 blocks away, radius 10 → already inside → skip
+  const fakeBot = makeNavigatorBot({ x: 108, y: 64, z: 200 });
+  let gotoCalled = false;
+  fakeBot.pathfinder.goto = async () => { gotoCalled = true; };
+  const nav = new Navigator(fakeBot, fakeNavConfig, silentLogger, fakeDeps);
+  await nav.goToChamber(10);
+  assert.ok(!gotoCalled);
+});
+
+test('goToChamber: rejects propagate to caller', async () => {
+  const fakeBot = makeNavigatorBot({ x: 0, y: 64, z: 0 }, async () => { throw new Error('no path'); });
+  const nav = new Navigator(fakeBot, fakeNavConfig, silentLogger, fakeDeps);
+  await assert.rejects(() => nav.goToChamber(), /no path/);
+});
+
+test('loadPlugin is called on construction', () => {
+  const fakeBot = makeNavigatorBot({ x: 0, y: 64, z: 0 });
+  new Navigator(fakeBot, fakeNavConfig, silentLogger, fakeDeps);
+  assert.strictEqual(fakeBot._pluginsLoaded.length, 1);
+});
+
+test('stop() does not throw when pathfinder throws internally', () => {
+  const fakeBot = makeNavigatorBot({ x: 0, y: 64, z: 0 });
+  fakeBot.pathfinder.stop = () => { throw new Error('not navigating'); };
+  const nav = new Navigator(fakeBot, fakeNavConfig, silentLogger, fakeDeps);
+  assert.doesNotThrow(() => nav.stop());
+});
+
 test('loadPearl: returns false on non-open trapdoor', async () => {
   const { controller } = makeTrapdoor(false);
   const block = { name: 'oak_trapdoor', position: { x:0, y:64, z:0, toString: () => '0,64,0' } };

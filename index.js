@@ -8,6 +8,7 @@ const CommandHandler = require('./modules/commands');
 const DiscordBot = require('./modules/discord');
 const AntiAFK = require('./modules/anti-afk');
 const QueueHandler = require('./modules/queue');
+const Navigator = require('./modules/navigator');
 const Logger = require('./modules/logger');
 
 const config = require('./config.json');
@@ -48,7 +49,7 @@ function createBot() {
 
   bot.once('spawn', () => {
     logger.info(`Spawned at ${bot.entity.position.floored()}`);
-    onBotReady(bot);
+    onBotReady(bot).catch((err) => logger.error(`Startup error: ${err.message}`));
   });
 
   bot.on('error', (err) => {
@@ -58,10 +59,18 @@ function createBot() {
   return bot;
 }
 
-function onBotReady(bot) {
+async function onBotReady(bot) {
   currentBot = bot;
-  bindModules(bot);
   attachLogListeners(bot);
+
+  const navigator = new Navigator(bot, config, logger);
+  try {
+    await navigator.goToChamber();
+  } catch (err) {
+    logger.warn(`Navigation failed: ${err.message} — scanning from current position`);
+  }
+
+  bindModules(bot);
 }
 
 function attachLogListeners(bot) {
@@ -105,10 +114,8 @@ function setupQueueHandler(bot) {
   });
 
   queueHandler.on('reconnected', (newBot) => {
-    logger.info('Reconnected — rebinding modules to new bot instance');
-    currentBot = newBot;
-    bindModules(newBot);
-    attachLogListeners(newBot);
+    logger.info('Reconnected — navigating to chamber and rebinding modules');
+    onBotReady(newBot).catch((err) => logger.error(`Post-reconnect startup error: ${err.message}`));
   });
 
   queueHandler.on('max-attempts-reached', () => {
