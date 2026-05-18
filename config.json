@@ -1,0 +1,46 @@
+{
+  "bot": {
+    "username": "BOT_USERNAME_HERE",
+    "auth": "microsoft",
+    "host": "2b2t.org",
+    "port": 25565,
+    "version": "1.21.4"
+  },
+  "stasis": {
+    "chamber_center": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "scan_radius": 15,
+    "scan_interval_ms": 3000
+  },
+  "discord": {
+    "enabled": false,
+    "token": "DISCORD_BOT_TOKEN_HERE",
+    "channel_id": "CHANNEL_ID_HERE",
+    "prefix": "!pearl"
+  },
+  "anti_afk": {
+    "enabled": true,
+    "interval_ms": 300000,
+    "mode": "look_around",
+    "modes": ["look_around", "sneak_toggle", "small_jump", "chat_ping"]
+  },
+  "queue": {
+    "auto_reconnect": true,
+    "max_reconnect_attempts": 0,
+    "reconnect_delay_base_ms": 30000,
+    "reconnect_delay_max_ms": 600000
+  },
+  "whitelist": [
+    "Player1",
+    "Player2",
+    "Player3"
+  ],
+  "logging": {
+    "level": "info",
+    "log_to_file": true,
+    "log_file": "pearl-bot.log"
+  }
+}
