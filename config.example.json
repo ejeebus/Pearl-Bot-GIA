@@ -19,13 +19,17 @@
     "enabled": false,
     "token": "DISCORD_BOT_TOKEN_HERE",
     "channel_id": "CHANNEL_ID_HERE",
-    "prefix": "!pearl"
+    "prefix": "!pearl",
+    "whitelist": [
+      "DiscordUsername1",
+      "DiscordUsername2"
+    ]
   },
   "anti_afk": {
     "enabled": true,
     "interval_ms": 300000,
     "mode": "look_around",
-    "modes": ["look_around", "sneak_toggle", "small_jump", "chat_ping"]
+    "modes": ["look_around", "sneak_toggle", "small_jump"]
   },
   "queue": {
     "auto_reconnect": true,

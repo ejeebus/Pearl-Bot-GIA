@@ -52,16 +52,16 @@ class CommandHandler extends EventEmitter {
       `Chat command from ${command.sender}: !pearl ${command.target}`
     );
 
-    const now = Date.now();
-    if (now - this._lastChatTime < this._minChatInterval) {
-      this.logger.debug(`Rate limited — skipping response to ${command.sender}`);
-      return;
-    }
-
     if (!this.whitelist.isAuthorized(command.sender)) {
       this.logger.warn(
         `Unauthorized !pearl attempt by ${command.sender} (target: ${command.target})`
       );
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this._lastChatTime < this._minChatInterval) {
+      this.logger.debug(`Rate limited — skipping response to ${command.sender}`);
       return;
     }
 
@@ -76,9 +76,13 @@ class CommandHandler extends EventEmitter {
       return;
     }
 
-    this.trapdoorController.loadPearl(command.target, pearlData.trapdoorBlock);
     this.bot.chat(`Loading pearl for ${command.target}`);
     this._lastChatTime = now;
+
+    this.trapdoorController.loadPearl(command.target, pearlData.trapdoorBlock)
+      .catch((err) => {
+        this.logger.error(`Pearl load failed for ${command.target}: ${err.message}`);
+      });
 
     this.emit("pearl-requested", {
       playerName: command.target,

@@ -10,15 +10,16 @@
  *
  * Usage:
  *   const TrapdoorController = require('./modules/trapdoor');
- *   const controller = new TrapdoorController(bot);
+ *   const controller = new TrapdoorController(bot, logger);
  *   await controller.loadPearl('Player1', trapdoorBlock);
  */
 
 const TRAPDOOR_WAIT_MS = 2000;
 
 class TrapdoorController {
-  constructor(bot) {
+  constructor(bot, logger) {
     this.bot = bot;
+    this.logger = logger;
   }
 
   _assertTrapdoor(block) {
@@ -29,6 +30,11 @@ class TrapdoorController {
     }
   }
 
+  /** Re-fetch a block from the world to get current server-side state. */
+  _refresh(block) {
+    return this.bot.blockAt(block.position);
+  }
+
   /**
    * Close a single trapdoor. No-op if already closed.
    * @param {import('prismarine-block').Block} block - The trapdoor block
@@ -37,15 +43,16 @@ class TrapdoorController {
   async closeTrapdoor(block) {
     this._assertTrapdoor(block);
 
-    const props = block.getProperties();
+    const current = this._refresh(block);
+    const props = current.getProperties();
     if (!props.open) {
-      console.log(`[Trapdoor] Trapdoor at ${block.position} is already closed, skipping`);
+      this.logger.debug(`Trapdoor at ${block.position} is already closed, skipping`);
       return false;
     }
 
-    console.log(`[Trapdoor] Closing trapdoor at ${block.position}`);
-    await this.bot.activateBlock(block);
-    console.log(`[Trapdoor] Trapdoor closed at ${block.position}`);
+    this.logger.debug(`Closing trapdoor at ${block.position}`);
+    await this.bot.activateBlock(current);
+    this.logger.debug(`Trapdoor closed at ${block.position}`);
     return true;
   }
 
@@ -57,15 +64,16 @@ class TrapdoorController {
   async openTrapdoor(block) {
     this._assertTrapdoor(block);
 
-    const props = block.getProperties();
+    const current = this._refresh(block);
+    const props = current.getProperties();
     if (props.open) {
-      console.log(`[Trapdoor] Trapdoor at ${block.position} is already open, skipping`);
+      this.logger.debug(`Trapdoor at ${block.position} is already open, skipping`);
       return false;
     }
 
-    console.log(`[Trapdoor] Opening trapdoor at ${block.position}`);
-    await this.bot.activateBlock(block);
-    console.log(`[Trapdoor] Trapdoor opened at ${block.position}`);
+    this.logger.debug(`Opening trapdoor at ${block.position}`);
+    await this.bot.activateBlock(current);
+    this.logger.debug(`Trapdoor opened at ${block.position}`);
     return true;
   }
 
@@ -84,9 +92,10 @@ class TrapdoorController {
   async toggleTrapdoor(block) {
     this._assertTrapdoor(block);
 
-    const props = block.getProperties();
+    const current = this._refresh(block);
+    const props = current.getProperties();
     if (!props.open) {
-      console.log(`[Trapdoor] Trapdoor at ${block.position} is not open, cannot toggle`);
+      this.logger.warn(`Trapdoor at ${block.position} is not open, cannot toggle`);
       return { success: false, playerName: null };
     }
 
@@ -94,30 +103,30 @@ class TrapdoorController {
     let teleportedPlayer = null;
     const teleportHandler = (player) => {
       teleportedPlayer = player.username;
-      console.log(`[Trapdoor] Detected teleport for ${player.username}`);
+      this.logger.debug(`Detected teleport for ${player.username}`);
     };
     this.bot.on('playerTeleport', teleportHandler);
 
     try {
       // Step 1: Close the trapdoor — this releases the pearl entity
-      console.log(`[Trapdoor] Closing trapdoor at ${block.position} to release pearl`);
-      await this.bot.activateBlock(block);
+      this.logger.debug(`Closing trapdoor at ${block.position} to release pearl`);
+      await this.bot.activateBlock(current);
 
       // Step 2: Wait for the pearl to fall and the player to teleport
-      console.log(`[Trapdoor] Waiting ${TRAPDOOR_WAIT_MS}ms for pearl fall and teleport`);
       await new Promise((resolve) => setTimeout(resolve, TRAPDOOR_WAIT_MS));
 
-      // Step 3: Re-open the trapdoor for future use
-      console.log(`[Trapdoor] Re-opening trapdoor at ${block.position}`);
-      await this.bot.activateBlock(block);
-      console.log(`[Trapdoor] Trapdoor re-opened successfully`);
+      // Step 3: Re-open the trapdoor for future use (re-fetch for current state)
+      const reopenBlock = this._refresh(block);
+      this.logger.debug(`Re-opening trapdoor at ${block.position}`);
+      await this.bot.activateBlock(reopenBlock);
+      this.logger.debug(`Trapdoor re-opened at ${block.position}`);
 
       return {
         success: true,
         playerName: teleportedPlayer,
       };
     } catch (err) {
-      console.error(`[Trapdoor] Error during toggle: ${err.message}`);
+      this.logger.error(`Error during trapdoor toggle at ${block.position}: ${err.message}`);
       return { success: false, playerName: null };
     } finally {
       this.bot.removeListener('playerTeleport', teleportHandler);
@@ -135,15 +144,15 @@ class TrapdoorController {
    * @returns {Promise<boolean>} Whether the load completed successfully
    */
   async loadPearl(playerName, trapdoorBlock) {
-    console.log(`[Trapdoor] Starting pearl load for ${playerName}`);
+    this.logger.info(`Starting pearl load for ${playerName}`);
 
     const result = await this.toggleTrapdoor(trapdoorBlock);
 
     if (result.success) {
       const who = result.playerName || playerName;
-      console.log(`[Trapdoor] Pearl load succeeded for ${who}`);
+      this.logger.info(`Pearl load succeeded for ${who}`);
     } else {
-      console.error(`[Trapdoor] Pearl load failed for ${playerName}`);
+      this.logger.error(`Pearl load failed for ${playerName}`);
     }
 
     return result.success;

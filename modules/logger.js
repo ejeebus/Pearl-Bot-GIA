@@ -66,6 +66,14 @@ class Logger {
       if (this.logToFile && this.stream) this.stream.write(line + "\n");
     }
   }
+
+  /** Flush and close the log file stream. Call during graceful shutdown. */
+  close() {
+    if (this.stream) {
+      this.stream.end();
+      this.stream = null;
+    }
+  }
 }
 
 module.exports = Logger;

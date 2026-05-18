@@ -54,7 +54,7 @@ class DiscordBot {
       return;
     }
 
-    const token = discordCfg.token;
+    const token = process.env.DISCORD_TOKEN || discordCfg.token;
     if (!token || token === "DISCORD_BOT_TOKEN_HERE") {
       this.logger.warn("Discord token not configured — bot disabled");
       return;
@@ -67,6 +67,7 @@ class DiscordBot {
 
     this.client = new Client({
       intents: [
+        GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
       ],
@@ -100,6 +101,22 @@ class DiscordBot {
   // ------------------------------------------------------------------
   // Internal helpers
   // ------------------------------------------------------------------
+
+  /**
+   * Check if a Discord name is authorized to use the bot.
+   * Uses config.discord.whitelist if configured (Discord usernames/nicknames),
+   * otherwise falls back to the Minecraft whitelist — in that case Discord
+   * server nicknames must match Minecraft usernames exactly.
+   */
+  _isDiscordAuthorized(discordName) {
+    const discordWhitelist = this.config.discord?.whitelist;
+    if (Array.isArray(discordWhitelist) && discordWhitelist.length > 0) {
+      return discordWhitelist.some(
+        (n) => n.toLowerCase() === discordName.toLowerCase(),
+      );
+    }
+    return this.whitelist.isAuthorized(discordName);
+  }
 
   /** Wire up all client event handlers */
   _attachHandlers() {
@@ -155,7 +172,7 @@ class DiscordBot {
 
     // Whitelist check: use server nickname if available, otherwise global username
     const discordName = message.member?.nickname || message.author.username;
-    if (!this.whitelist.isAuthorized(discordName)) {
+    if (!this._isDiscordAuthorized(discordName)) {
       this.logger.warn(
         `Unauthorized pearl request by "${discordName}" (id: ${message.author.id}) for "${targetPlayer}"`,
       );
