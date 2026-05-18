@@ -60,9 +60,11 @@ function createBot() {
 
 function onBotReady(bot) {
   currentBot = bot;
-
   bindModules(bot);
+  attachLogListeners(bot);
+}
 
+function attachLogListeners(bot) {
   bot.on('messagestr', (msg) => {
     if (msg.length < 200) {
       logger.chat(msg);
@@ -106,6 +108,7 @@ function setupQueueHandler(bot) {
     logger.info('Reconnected — rebinding modules to new bot instance');
     currentBot = newBot;
     bindModules(newBot);
+    attachLogListeners(newBot);
   });
 
   queueHandler.on('max-attempts-reached', () => {
