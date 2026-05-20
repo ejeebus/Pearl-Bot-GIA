@@ -107,10 +107,10 @@ function bindModules(bot) {
 
   pearlScanner = new PearlScanner(bot, config, logger);
   trapdoorController = new TrapdoorController(bot, logger);
-  commandHandler = new CommandHandler(bot, whitelist, pearlScanner, trapdoorController, logger);
+  recruiter = new Recruiter(bot, logger);
+  commandHandler = new CommandHandler(bot, whitelist, pearlScanner, trapdoorController, recruiter, logger);
   antiAfk = new AntiAFK(bot, config.anti_afk, logger);
   intruderDetector = new IntruderDetector(bot, whitelist, logger);
-  recruiter = new Recruiter(bot, logger);
 
   discordBot.pearlScanner = pearlScanner;
   discordBot.trapdoorController = trapdoorController;

@@ -14,12 +14,13 @@ class CommandHandler extends EventEmitter {
    * @param {object} trapdoorController - Must have loadPearl(name, block)
    * @param {import('./logger')} logger - Logger instance
    */
-  constructor(bot, whitelist, pearlScanner, trapdoorController, logger) {
+  constructor(bot, whitelist, pearlScanner, trapdoorController, recruiter, logger) {
     super();
     this.bot = bot;
     this.whitelist = whitelist;
     this.pearlScanner = pearlScanner;
     this.trapdoorController = trapdoorController;
+    this.recruiter = recruiter;
     this.logger = logger;
 
     /** @private */ this._listening = false;
@@ -62,6 +63,14 @@ class CommandHandler extends EventEmitter {
     const now = Date.now();
     if (now - this._lastChatTime < this._minChatInterval) {
       this.logger.debug(`Rate limited — skipping response to ${command.sender}`);
+      return;
+    }
+
+    // !recruit — fire recruitment message immediately
+    if (command.target === '__recruit') {
+      this.recruiter.send();
+      this._lastChatTime = now;
+      this.logger.info(`Recruitment message triggered by ${command.sender}`);
       return;
     }
 
@@ -186,6 +195,10 @@ class CommandHandler extends EventEmitter {
       .replace(/^[a-zA-Z0-9_]{1,16} whispers(?: to you)?:\s*/, "");
 
     let match;
+
+    // !recruit — trigger recruitment message immediately
+    match = text.match(/^!recruit\s*$/i);
+    if (match) return { sender, target: '__recruit' };
 
     // !pearls — list all tracked pearls
     match = text.match(/^!pearls\s*$/i);
