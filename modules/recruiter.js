@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 
 const INTERVAL_MS = 5 * 60 * 1000;
-const MESSAGE = '> The GIA wants YOU! Become a member today';
+const MESSAGE = 'The GIA wants YOU! Become a member today';
 
 class Recruiter {
   constructor(bot, logger) {
@@ -12,7 +12,7 @@ class Recruiter {
 
   start() {
     if (this._timer) return;
-    this._timer = setInterval(() => this._send(), INTERVAL_MS);
+    this._timer = setInterval(() => this.send(), INTERVAL_MS);
     if (this._timer.unref) this._timer.unref();
   }
 
@@ -23,7 +23,7 @@ class Recruiter {
     }
   }
 
-  _send() {
+  send() {
     const hash = crypto.randomBytes(6).toString('hex');
     const msg = `${MESSAGE} [${hash}]`;
     try {
