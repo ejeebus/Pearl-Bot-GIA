@@ -65,6 +65,17 @@ class CommandHandler extends EventEmitter {
       return;
     }
 
+    // !pearls — list all tracked pearls for debugging
+    if (command.target === '__list') {
+      const known = this.pearlScanner.getKnownPearls();
+      const names = [...known.keys()];
+      const reply = names.length ? `Tracked: ${names.join(', ')}` : 'No pearls tracked';
+      this.bot.chat(reply);
+      this._lastChatTime = now;
+      this.logger.info(`Pearl list requested by ${command.sender}: ${reply}`);
+      return;
+    }
+
     const pearlData = this.pearlScanner.getPearlForPlayer(command.target);
 
     if (!pearlData) {
@@ -123,14 +134,29 @@ class CommandHandler extends EventEmitter {
           }
         }
       }
+
+      // Whisper (1.19+): translate key "commands.message.display.incoming"
+      // with[0] = sender name, with[1] = message body
+      if (jsonMsg?.json?.translate === "commands.message.display.incoming") {
+        const withData = jsonMsg.json.with;
+        if (Array.isArray(withData) && withData.length >= 1) {
+          const s = withData[0];
+          const name = typeof s === "string" ? s : (s?.text ?? s?.insertion);
+          if (name) return name;
+        }
+      }
     } catch {
       // jsonMsg structure may vary — fall through to text parsing
     }
 
-    // Fallback: plain text <PlayerName> pattern
     if (typeof msg === "string") {
-      const match = msg.match(/^<([^>]+?)>\s/);
-      if (match) return match[1];
+      // Public chat fallback: <PlayerName> message
+      const pubMatch = msg.match(/^<([^>]+?)>\s/);
+      if (pubMatch) return pubMatch[1];
+
+      // Whisper fallback: "PlayerName whispers: message" or "PlayerName whispers to you: message"
+      const whisperMatch = msg.match(/^([a-zA-Z0-9_]{1,16}) whispers(?: to you)?:/);
+      if (whisperMatch) return whisperMatch[1];
     }
 
     return null;
@@ -154,10 +180,16 @@ class CommandHandler extends EventEmitter {
   _parseCommand(msg, sender) {
     if (typeof msg !== "string") return null;
 
-    // Strip leading <SenderName> prefix if present
-    const text = msg.replace(/^<[^>]+?>\s*/, "");
+    // Strip public chat prefix (<Name>) or whisper prefix (Name whispers to you:)
+    const text = msg
+      .replace(/^<[^>]+?>\s*/, "")
+      .replace(/^[a-zA-Z0-9_]{1,16} whispers(?: to you)?:\s*/, "");
 
     let match;
+
+    // !pearls — list all tracked pearls
+    match = text.match(/^!pearls\s*$/i);
+    if (match) return { sender, target: '__list' };
 
     // !pearl (no args — target self)
     match = text.match(/^!pearl\s*$/i);

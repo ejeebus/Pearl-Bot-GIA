@@ -8,13 +8,15 @@ const CommandHandler = require('./modules/commands');
 const DiscordBot = require('./modules/discord');
 const AntiAFK = require('./modules/anti-afk');
 const QueueHandler = require('./modules/queue');
+const IntruderDetector = require('./modules/intruder');
+const Recruiter = require('./modules/recruiter');
 const Logger = require('./modules/logger');
 
 const config = require('./config.json');
 const logger = new Logger(config);
 const whitelist = new WhitelistManager(config);
 
-let pearlScanner, trapdoorController, commandHandler, antiAfk, queueHandler;
+let pearlScanner, trapdoorController, commandHandler, antiAfk, queueHandler, intruderDetector, recruiter;
 let currentBot = null;
 let shutdownRequested = false;
 
@@ -31,13 +33,6 @@ function createBot() {
     version: config.bot.version,
   };
 
-  if (authType === 'microsoft') {
-    if (process.env.MICROSOFT_EMAIL && process.env.MICROSOFT_PASSWORD) {
-      opts.username = process.env.MICROSOFT_EMAIL;
-      opts.password = process.env.MICROSOFT_PASSWORD;
-    }
-  }
-
   if (authType === 'mojang') {
     if (process.env.MOJANG_PASSWORD) {
       opts.password = process.env.MOJANG_PASSWORD;
@@ -45,8 +40,21 @@ function createBot() {
   }
 
   const bot = mineflayer.createBot(opts);
+  let hasSpawned = false;
+
+  bot._client.on('error', (err) => logger.error(`[CLIENT ERR] ${err.message}`));
+
+  // Pause physics during configuration state so we don't send position packets
+  // to the server while it's not in play state — 2b2t re-enters config after queue
+  // and Velocity crashes if it receives unexpected position packets during that phase.
+  bot._client.on('state', (newState) => {
+    if (newState === 'configuration') bot.physicsEnabled = false;
+    else if (newState === 'play') bot.physicsEnabled = true;
+  });
 
   bot.once('spawn', () => {
+    hasSpawned = true;
+    bot.physicsEnabled = true;
     logger.info(`Spawned at ${bot.entity.position.floored()}`);
     onBotReady(bot);
   });
@@ -54,6 +62,21 @@ function createBot() {
   bot.on('error', (err) => {
     logger.error(`Bot error: ${err.message}`);
   });
+
+  // If disconnected before spawn (e.g. kicked while in 2b2t queue), reconnect manually
+  // since QueueHandler only attaches after spawn. Guard with a flag because both
+  // 'kicked' and 'end' can fire for the same disconnect.
+  let reconnectScheduled = false;
+  const onPreSpawnDisconnect = (reason) => {
+    if (hasSpawned || shutdownRequested || reconnectScheduled) return;
+    reconnectScheduled = true;
+    const reasonStr = typeof reason === 'string' ? reason : (reason ? JSON.stringify(reason) : 'unknown');
+    logger.warn(`Disconnected before spawn: ${reasonStr} — reconnecting in 30s`);
+    setTimeout(() => { if (!shutdownRequested) createBot(); }, 30000);
+  };
+
+  bot.once('end', onPreSpawnDisconnect);
+  bot.once('kicked', onPreSpawnDisconnect);
 
   return bot;
 }
@@ -79,11 +102,15 @@ function bindModules(bot) {
   if (commandHandler) commandHandler.stop();
   if (antiAfk) antiAfk.stop();
   if (queueHandler) queueHandler.stop();
+  if (intruderDetector) intruderDetector.stop();
+  if (recruiter) recruiter.stop();
 
   pearlScanner = new PearlScanner(bot, config, logger);
   trapdoorController = new TrapdoorController(bot, logger);
   commandHandler = new CommandHandler(bot, whitelist, pearlScanner, trapdoorController, logger);
   antiAfk = new AntiAFK(bot, config.anti_afk, logger);
+  intruderDetector = new IntruderDetector(bot, whitelist, logger);
+  recruiter = new Recruiter(bot, logger);
 
   discordBot.pearlScanner = pearlScanner;
   discordBot.trapdoorController = trapdoorController;
@@ -91,6 +118,23 @@ function bindModules(bot) {
   pearlScanner.startScanning();
   commandHandler.start();
   antiAfk.start();
+  recruiter.start();
+
+  if (config.intruder?.enabled !== false) {
+    intruderDetector.start();
+    intruderDetector.on('intruder', (playerName) => {
+      discordBot.sendIntruderAlert(playerName).catch(() => {});
+
+      if (config.intruder?.auto_disconnect) {
+        const delay = config.intruder.reconnect_delay_ms ?? 300000;
+        logger.warn(`Intruder ${playerName} — disconnecting, reconnecting in ${Math.round(delay / 1000)}s`);
+        intruderDetector.stop();
+        if (queueHandler) queueHandler.stop();
+        try { bot.quit('Intruder detected'); } catch {}
+        setTimeout(() => { if (!shutdownRequested) createBot(); }, delay);
+      }
+    });
+  }
 
   setupQueueHandler(bot);
 }
@@ -122,6 +166,8 @@ function cleanup() {
   if (commandHandler) commandHandler.stop();
   if (antiAfk) antiAfk.stop();
   if (queueHandler) queueHandler.stop();
+  if (intruderDetector) intruderDetector.stop();
+  if (recruiter) recruiter.stop();
   if (discordBot) discordBot.stop().catch(() => {});
   if (currentBot && !shutdownRequested) {
     try { currentBot.quit('Graceful shutdown'); } catch {}

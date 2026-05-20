@@ -144,7 +144,7 @@ class TrapdoorController {
    * @returns {Promise<boolean>} Whether the load completed successfully
    */
   async loadPearl(playerName, trapdoorBlock) {
-    this.logger.info(`Starting pearl load for ${playerName}`);
+    this.logger.info(`Starting pearl load for ${playerName} — trapdoor at ${trapdoorBlock?.position}`);
 
     const result = await this.toggleTrapdoor(trapdoorBlock);
 
