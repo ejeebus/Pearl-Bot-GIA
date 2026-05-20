@@ -23,6 +23,7 @@ const COLORS = {
   ERROR: 0xed4245,
   DENIED: 0xfee75c,
   INFO: 0x5865f2,
+  ALERT: 0xff6600,
 };
 
 class DiscordBot {
@@ -292,6 +293,20 @@ class DiscordBot {
   // ------------------------------------------------------------------
   // Public channel send helper
   // ------------------------------------------------------------------
+
+  /**
+   * Send an intruder alert embed to the configured Discord channel.
+   * @param {string} playerName - The intruding player's username
+   */
+  async sendIntruderAlert(playerName) {
+    const embed = new EmbedBuilder()
+      .setColor(COLORS.ALERT)
+      .setTitle('Intruder Alert')
+      .setDescription(`**${playerName}** entered render distance of the stasis chamber.`)
+      .addFields({ name: 'Action', value: 'Bot is disconnecting to protect the chamber.' })
+      .setTimestamp();
+    await this.sendToChannel({ embeds: [embed] });
+  }
 
   /**
    * Send a plain message or embed to the configured Discord channel.

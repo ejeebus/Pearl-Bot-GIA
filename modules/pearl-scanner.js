@@ -32,6 +32,8 @@ class PearlScanner extends EventEmitter {
     this._scanTimer = null;
     /** @type {Map<string, {entity: object, blockPos: import('vec3').Vec3}>} */
     this._knownPearls = new Map();
+    /** @type {Set<number>} entity IDs already warned about missing trapdoor */
+    this._noTrapdoorWarned = new Set();
   }
 
   /**
@@ -59,24 +61,148 @@ class PearlScanner extends EventEmitter {
       const distSq = dx * dx + dy * dy + dz * dz;
       if (distSq > radiusSq) continue;
 
-      // Block position directly above the pearl — this is where the trapdoor should be
-      const blockPos = entity.position.floored().offset(0, 1, 0);
-      const block = this.bot.blockAt(blockPos);
-
-      if (!block || !block.name.includes('trapdoor')) {
-        this.logger.warn(
-          `No trapdoor found above pearl at ${blockPos} (entity ${entity.id})`
-        );
-        continue;
+      // Find the trapdoor controlling this pearl — search y-3 to y+3
+      let blockPos = null;
+      let block = null;
+      for (let dy = -5; dy <= 10; dy++) {
+        const pos = entity.position.floored().offset(0, dy, 0);
+        const b = this.bot.blockAt(pos);
+        if (b && b.name.includes('trapdoor')) {
+          blockPos = pos;
+          block = b;
+          break;
+        }
       }
 
-      // Resolve which player owns this pearl
-      const playerName = this._resolvePearlOwner(entity);
+      if (!block) {
+        // Only warn once per entity to avoid log spam every scan cycle
+        if (!this._noTrapdoorWarned.has(entity.id)) {
+          this._noTrapdoorWarned.add(entity.id);
+          const base = entity.position.floored();
+          const nearby = [-1, 1, 3, 5, 7, 10].map(dy => {
+            const b = this.bot.blockAt(base.offset(0, dy, 0));
+            return `y${dy > 0 ? '+' : ''}${dy}:${b?.name ?? 'null'}`;
+          }).join(', ');
+          this.logger.warn(`No trapdoor near pearl at ${base} — ${nearby}`);
+        }
+        continue;
+      }
+      this._noTrapdoorWarned.delete(entity.id);
+
+      // Resolve which player owns this pearl — sign text takes priority over metadata.
+      // Check near the trapdoor first (sign is usually on the wall beside the trapdoor),
+      // then fall back to near the pearl itself.
+      const signName =
+        this._readNearbySign(blockPos, `trapdoor@${blockPos}`) ??
+        this._readNearbySign(entity.position.floored(), `pearl@${entity.position.floored()}`);
+
+      if (!signName && !this._noSignWarned?.has(entity.id)) {
+        (this._noSignWarned ??= new Set()).add(entity.id);
+        this.logger.warn(`No sign found near trapdoor ${blockPos} or pearl ${entity.position.floored()}`);
+      }
+
+      const playerName = signName ?? this._resolvePearlOwner(entity);
 
       pearls.push({ entity, blockPos, playerName });
     }
 
     return pearls;
+  }
+
+  /**
+   * Search blocks adjacent to a pearl for a sign and return its first non-empty line.
+   * Checks same-level walls first, then above, then below — covering common chamber layouts.
+   *
+   * @param {import('vec3').Vec3} pearlBlock - Floored pearl position
+   * @returns {string|null} Player name from sign text, or null if no sign found
+   */
+  _readNearbySign(pearlBlock, debugLabel) {
+    const offsets = [
+      // Same level — 1 and 2 blocks out in each cardinal direction
+      [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1],
+      [2, 0, 0], [-2, 0, 0], [0, 0, 2], [0, 0, -2],
+      // Directly above (wall sign mounted above trapdoor opening)
+      [0, 1, 0], [0, 2, 0],
+      // One above, cardinal directions (wall sign 1 block behind and 1 above)
+      [1, 1, 0], [-1, 1, 0], [0, 1, 1], [0, 1, -1],
+      [2, 1, 0], [-2, 1, 0], [0, 1, 2], [0, 1, -2],
+      // One below
+      [0, -1, 0],
+      [1, -1, 0], [-1, -1, 0], [0, -1, 1], [0, -1, -1],
+    ];
+    for (const [dx, dy, dz] of offsets) {
+      const b = this.bot.blockAt(pearlBlock.offset(dx, dy, dz));
+      if (!b || !b.name.includes('sign')) continue;
+      const pos = pearlBlock.offset(dx, dy, dz);
+      const name = this._parseSignText(b);
+      if (name) return name;
+      // Sign found but couldn't read text — log raw entity for diagnosis
+      this.logger.warn(`Sign at ${pos} (from ${debugLabel ?? pearlBlock}) found but text was empty`);
+    }
+    return null;
+  }
+
+  /**
+   * Extract the first non-empty text line from a sign block entity.
+   * Handles both the 1.20+ front_text.messages format and the legacy Text1-Text4 format.
+   *
+   * @param {import('prismarine-block').Block} block - A sign block
+   * @returns {string|null}
+   */
+  _parseSignText(block) {
+    if (!block.entity) return null;
+    try {
+      const root = block.entity.value ?? block.entity;
+      const frontText = root.front_text?.value ?? root.front_text;
+      if (!frontText) return null;
+
+      // messages is TAG_List → {type:"list", value:{type:"compound"|"string", value:[...]}}
+      const msgList = frontText.messages?.value?.value;
+      if (!Array.isArray(msgList)) return null;
+
+      for (const msg of msgList) {
+        const text = this._extractTextComponent(msg);
+        if (text) return text;
+      }
+    } catch {
+      // malformed NBT — skip
+    }
+    return null;
+  }
+
+  _extractTextComponent(msg) {
+    if (!msg) return null;
+
+    // Case 1: TAG_String — JSON-encoded text component e.g. '{"text":"name"}'
+    if (typeof msg === 'string' || msg.type === 'string') {
+      const raw = typeof msg === 'string' ? msg : msg.value;
+      try {
+        const t = JSON.parse(raw);
+        return (t.text?.trim() || t.extra?.[0]?.text?.trim()) ?? null;
+      } catch {
+        return (typeof raw === 'string' ? raw.trim() : null) || null;
+      }
+    }
+
+    // Case 2: TAG_Compound — raw NBT text component
+    // e.g. {text:{type:"string",value:""}, extra:{type:"list",value:{type:"string",value:["name"]}}}
+    const comp = msg.type === 'compound' ? msg.value : msg;
+    if (!comp) return null;
+
+    // Direct text field
+    const direct = comp.text?.value ?? comp.text;
+    if (typeof direct === 'string' && direct.trim()) return direct.trim();
+
+    // Extra list of strings
+    const extraItems = comp.extra?.value?.value ?? comp.extra?.value ?? comp.extra;
+    if (Array.isArray(extraItems)) {
+      for (const item of extraItems) {
+        const s = typeof item === 'string' ? item : (item?.value ?? null);
+        if (typeof s === 'string' && s.trim()) return s.trim();
+      }
+    }
+
+    return null;
   }
 
   /**
