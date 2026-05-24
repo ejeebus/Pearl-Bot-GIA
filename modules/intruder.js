@@ -66,7 +66,8 @@ class IntruderDetector extends EventEmitter {
   _onEntityGone(entity) {
     if (entity.type !== 'player') return;
     const name = entity.username;
-    if (name) {
+    if (!name) return;
+    if (this._alerted.has(name)) {
       this._alerted.delete(name);
       this.logger.info(`Intruder ${name} left render distance`);
     }

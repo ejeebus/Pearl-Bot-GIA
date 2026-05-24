@@ -61,11 +61,11 @@ class PearlScanner extends EventEmitter {
       const distSq = dx * dx + dy * dy + dz * dz;
       if (distSq > radiusSq) continue;
 
-      // Find the trapdoor controlling this pearl — search y-3 to y+3
+      // Find the trapdoor controlling this pearl — search y-5 to y+10
       let blockPos = null;
       let block = null;
-      for (let dy = -5; dy <= 10; dy++) {
-        const pos = entity.position.floored().offset(0, dy, 0);
+      for (let yOffset = -5; yOffset <= 10; yOffset++) {
+        const pos = entity.position.floored().offset(0, yOffset, 0);
         const b = this.bot.blockAt(pos);
         if (b && b.name.includes('trapdoor')) {
           blockPos = pos;
