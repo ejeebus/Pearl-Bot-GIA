@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
-const MESSAGE = 'The GIA wants YOU! Become a member today';
+const MESSAGE = 'The GIA wants YOU! Become a member today| discord.gg/5Sqbgd6eTa';
 
 class Recruiter {
   constructor(bot, config, logger) {
