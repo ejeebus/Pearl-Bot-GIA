@@ -6,12 +6,18 @@
 
 const EventEmitter = require("events");
 
+const VALID_MC_NAME = /^[a-zA-Z0-9_]{1,16}$/;
+function isValidMinecraftName(name) {
+  return typeof name === 'string' && VALID_MC_NAME.test(name);
+}
+
 class CommandHandler extends EventEmitter {
   /**
    * @param {import('mineflayer').Bot} bot
    * @param {import('./whitelist')} whitelist - WhitelistManager instance
    * @param {object} pearlScanner - Must have getPearlForPlayer(name)
    * @param {object} trapdoorController - Must have loadPearl(name, block)
+   * @param {import('./recruiter')} recruiter - Recruiter instance
    * @param {import('./logger')} logger - Logger instance
    */
   constructor(bot, whitelist, pearlScanner, trapdoorController, recruiter, logger) {
@@ -79,7 +85,7 @@ class CommandHandler extends EventEmitter {
       const known = this.pearlScanner.getKnownPearls();
       const names = [...known.keys()];
       const reply = names.length ? `Tracked: ${names.join(', ')}` : 'No pearls tracked';
-      this.bot.chat(reply);
+      try { this.bot.chat(reply); } catch (err) { this.logger.error(`Chat send failed: ${err.message}`); }
       this._lastChatTime = now;
       this.logger.info(`Pearl list requested by ${command.sender}: ${reply}`);
       return;
@@ -88,7 +94,7 @@ class CommandHandler extends EventEmitter {
     const pearlData = this.pearlScanner.getPearlForPlayer(command.target);
 
     if (!pearlData) {
-      this.bot.chat(`No pearl found for ${command.target}`);
+      try { this.bot.chat(`No pearl found for ${command.target}`); } catch (err) { this.logger.error(`Chat send failed: ${err.message}`); }
       this._lastChatTime = now;
       this.logger.info(
         `No pearl found for ${command.target} (requested by ${command.sender})`
@@ -96,7 +102,7 @@ class CommandHandler extends EventEmitter {
       return;
     }
 
-    this.bot.chat(`Loading pearl for ${command.target}`);
+    try { this.bot.chat(`Loading pearl for ${command.target}`); } catch (err) { this.logger.error(`Chat send failed: ${err.message}`); }
     this._lastChatTime = now;
 
     this.trapdoorController.loadPearl(command.target, pearlData.trapdoorBlock)
@@ -211,19 +217,26 @@ class CommandHandler extends EventEmitter {
     // !pearl load [playerName]
     match = text.match(/^!pearl\s+load(?:\s+(.+))?$/i);
     if (match) {
-      return {
-        sender,
-        target: match[1] ? match[1].trim() : sender,
-      };
+      const target = match[1] ? match[1].trim() : sender;
+      if (!isValidMinecraftName(target)) return null;
+      return { sender, target };
     }
 
     // !pearl <playerName>
     match = text.match(/^!pearl\s+(.+)$/i);
-    if (match) return { sender, target: match[1].trim() };
+    if (match) {
+      const target = match[1].trim();
+      if (!isValidMinecraftName(target)) return null;
+      return { sender, target };
+    }
 
     // !loadpearl [playerName]
     match = text.match(/^!loadpearl\s+(.+)$/i);
-    if (match) return { sender, target: match[1].trim() };
+    if (match) {
+      const target = match[1].trim();
+      if (!isValidMinecraftName(target)) return null;
+      return { sender, target };
+    }
 
     // !loadpearl (no args — target self)
     match = text.match(/^!loadpearl\s*$/i);
