@@ -59,17 +59,46 @@ function createBot() {
     else if (newState === 'play') bot.physicsEnabled = true;
   });
 
-  // Re-establish the chat signing session on every Play Login packet.
-  // minecraft-protocol only handles the first login via once(); on 2b2t, Velocity
-  // transitions the client from the queue server to the game server by re-entering
-  // configuration state and sending a second Play Login. Without this, client._session
-  // remains bound to the queue server's session UUID which the game server never saw,
-  // so every chat_message is silently rejected by the game server.
-  bot._client.on('login', () => {
+  // Re-establish the chat signing session on every subsequent Play Login packet.
+  // On 2b2t, Velocity transitions the client from the queue server to the game server
+  // by re-entering configuration state then sending a second Play Login (0x2c).
+  // minecraft-protocol's play.js already handles the FIRST login via once('login');
+  // we skip that one and only re-initialize for every server after that.
+  // We also reset _lastSeenMessages so queue-server message signatures don't pollute
+  // the acknowledgement bitset sent to the game server, which would cause the game
+  // server to reject our signed chat_message packets.
+  let _firstLoginSeen = false;
+  bot._client.on('login', (packet) => {
+    if (packet.enforcesSecureChat !== undefined) {
+      logger.info(`Server login — enforcesSecureChat: ${packet.enforcesSecureChat}`);
+    }
+
+    if (!_firstLoginSeen) {
+      _firstLoginSeen = true;
+      logger.info('First login (queue server) — chat session handled by protocol layer');
+      return;
+    }
+
+    // Game server login after proxy transition
     const client = bot._client;
-    if (!client.profileKeys) return;
+    if (!client.profileKeys) {
+      logger.warn('Game server login: profileKeys not set — chat will be unsigned');
+      return;
+    }
+
     const newUUID = crypto.randomUUID().replace(/-/g, '');
     client._session = { index: 0, uuid: newUUID };
+
+    // Clear any queue-server message acknowledgements from the seen-messages buffer.
+    // If these stale signatures are included in the chat_message signing payload the
+    // game server cannot verify them and silently drops the message.
+    if (client._lastSeenMessages) {
+      client._lastSeenMessages.length = 0;
+      client._lastSeenMessages.offset = 0;
+      client._lastSeenMessages.pending = 0;
+    }
+    client._lastChatSignature = null;
+
     try {
       client.write('chat_session_update', {
         sessionUUID: newUUID,
@@ -77,7 +106,7 @@ function createBot() {
         publicKey: client.profileKeys.public.export({ type: 'spki', format: 'der' }),
         signature: client.profileKeys.signatureV2,
       });
-      logger.info('Chat session established with server');
+      logger.info('Chat session re-established for game server');
     } catch (err) {
       logger.warn(`Chat session update failed: ${err.message}`);
     }
