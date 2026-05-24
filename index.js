@@ -59,39 +59,38 @@ function createBot() {
     else if (newState === 'play') bot.physicsEnabled = true;
   });
 
-  // Re-establish the chat signing session on every subsequent Play Login packet.
-  // On 2b2t, Velocity transitions the client from the queue server to the game server
-  // by re-entering configuration state then sending a second Play Login (0x2c).
-  // minecraft-protocol's play.js already handles the FIRST login via once('login');
-  // we skip that one and only re-initialize for every server after that.
-  // We also reset _lastSeenMessages so queue-server message signatures don't pollute
-  // the acknowledgement bitset sent to the game server, which would cause the game
-  // server to reject our signed chat_message packets.
+  // Handle the proxy transition from queue server to game server.
+  // Velocity sends a second Play Login (0x2c) when switching backends.
+  // minecraft-protocol's once('login') in play.js handles the first one.
+  //
+  // Strategy: keep the session UUID that play.js established (Velocity already
+  // told the game server about that UUID via player_info). Only reset the index
+  // and clear the seen-messages buffer so queue-server acknowledgements don't
+  // corrupt the signing payload. No new chat_session_update is needed because
+  // Velocity propagated the session to the backend automatically.
   let _firstLoginSeen = false;
   bot._client.on('login', (packet) => {
-    if (packet.enforcesSecureChat !== undefined) {
-      logger.info(`Server login — enforcesSecureChat: ${packet.enforcesSecureChat}`);
-    }
+    logger.info(`Server login — enforcesSecureChat: ${packet.enforcesSecureChat}`);
 
     if (!_firstLoginSeen) {
       _firstLoginSeen = true;
-      logger.info('First login (queue server) — chat session handled by protocol layer');
+      logger.info('First login (queue server) — session initialised by protocol layer');
       return;
     }
 
     // Game server login after proxy transition
     const client = bot._client;
-    if (!client.profileKeys) {
-      logger.warn('Game server login: profileKeys not set — chat will be unsigned');
-      return;
+    const sessionUUID = client._session?.uuid ?? '(none)';
+    const sessionIndex = client._session?.index ?? '(none)';
+    logger.info(`Game server login — existing session: uuid=${sessionUUID} index=${sessionIndex}`);
+
+    // Reset the message index so the game server (which has never seen messages
+    // from this session) accepts index 0 as the first valid message.
+    if (client._session) {
+      client._session.index = 0;
     }
 
-    const newUUID = crypto.randomUUID().replace(/-/g, '');
-    client._session = { index: 0, uuid: newUUID };
-
-    // Clear any queue-server message acknowledgements from the seen-messages buffer.
-    // If these stale signatures are included in the chat_message signing payload the
-    // game server cannot verify them and silently drops the message.
+    // Clear queue-server player_chat signatures from the seen-messages buffer.
     if (client._lastSeenMessages) {
       client._lastSeenMessages.length = 0;
       client._lastSeenMessages.offset = 0;
@@ -99,18 +98,22 @@ function createBot() {
     }
     client._lastChatSignature = null;
 
-    try {
-      client.write('chat_session_update', {
-        sessionUUID: newUUID,
-        expireTime: BigInt(client.profileKeys.expiresOn.getTime()),
-        publicKey: client.profileKeys.public.export({ type: 'spki', format: 'der' }),
-        signature: client.profileKeys.signatureV2,
-      });
-      logger.info('Chat session re-established for game server');
-    } catch (err) {
-      logger.warn(`Chat session update failed: ${err.message}`);
-    }
+    logger.info(`Game server login — session ready: uuid=${client._session?.uuid ?? '(none)'} index=0 profileKeys=${!!client.profileKeys}`);
   });
+
+  // Intercept outgoing chat_message packets for diagnostics.
+  // Remove this block once chat is confirmed working.
+  const _origWrite = bot._client.write.bind(bot._client);
+  bot._client.write = function (name, params) {
+    if (name === 'chat_message') {
+      logger.info(
+        `[CHAT-TX] msg="${params.message}" sig=${params.signature ? params.signature.length + 'B' : 'none'} ` +
+        `offset=${params.offset} ack=${params.acknowledged?.toString('hex') ?? 'none'} ` +
+        `session=${bot._client._session ? bot._client._session.uuid.slice(0, 8) + '…idx' + (bot._client._session.index - 1) : 'null'}`
+      );
+    }
+    return _origWrite(name, params);
+  };
 
   bot.once('spawn', () => {
     hasSpawned = true;
