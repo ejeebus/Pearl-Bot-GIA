@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const crypto = require('crypto');
 const mineflayer = require('mineflayer');
 const WhitelistManager = require('./modules/whitelist');
 const PearlScanner = require('./modules/pearl-scanner');
@@ -12,7 +13,13 @@ const IntruderDetector = require('./modules/intruder');
 const Recruiter = require('./modules/recruiter');
 const Logger = require('./modules/logger');
 
-const config = require('./config.json');
+let config;
+try {
+  config = require('./config.json');
+} catch {
+  console.error('[FATAL] config.json not found — copy config.example.json to config.json and fill in your settings.');
+  process.exit(1);
+}
 const logger = new Logger(config);
 const whitelist = new WhitelistManager(config);
 
@@ -50,6 +57,30 @@ function createBot() {
   bot._client.on('state', (newState) => {
     if (newState === 'configuration') bot.physicsEnabled = false;
     else if (newState === 'play') bot.physicsEnabled = true;
+  });
+
+  // Re-establish the chat signing session on every Play Login packet.
+  // minecraft-protocol only handles the first login via once(); on 2b2t, Velocity
+  // transitions the client from the queue server to the game server by re-entering
+  // configuration state and sending a second Play Login. Without this, client._session
+  // remains bound to the queue server's session UUID which the game server never saw,
+  // so every chat_message is silently rejected by the game server.
+  bot._client.on('login', () => {
+    const client = bot._client;
+    if (!client.profileKeys) return;
+    const newUUID = crypto.randomUUID().replace(/-/g, '');
+    client._session = { index: 0, uuid: newUUID };
+    try {
+      client.write('chat_session_update', {
+        sessionUUID: newUUID,
+        expireTime: BigInt(client.profileKeys.expiresOn.getTime()),
+        publicKey: client.profileKeys.public.export({ type: 'spki', format: 'der' }),
+        signature: client.profileKeys.signatureV2,
+      });
+      logger.info('Chat session established with server');
+    } catch (err) {
+      logger.warn(`Chat session update failed: ${err.message}`);
+    }
   });
 
   bot.once('spawn', () => {
@@ -107,7 +138,7 @@ function bindModules(bot) {
 
   pearlScanner = new PearlScanner(bot, config, logger);
   trapdoorController = new TrapdoorController(bot, logger);
-  recruiter = new Recruiter(bot, logger);
+  recruiter = new Recruiter(bot, config, logger);
   commandHandler = new CommandHandler(bot, whitelist, pearlScanner, trapdoorController, recruiter, logger);
   antiAfk = new AntiAFK(bot, config.anti_afk, logger);
   intruderDetector = new IntruderDetector(bot, whitelist, logger);
@@ -130,7 +161,9 @@ function bindModules(bot) {
         logger.warn(`Intruder ${playerName} — disconnecting, reconnecting in ${Math.round(delay / 1000)}s`);
         intruderDetector.stop();
         if (queueHandler) queueHandler.stop();
-        try { bot.quit('Intruder detected'); } catch {}
+        try { bot.quit('Intruder detected'); } catch (err) {
+          logger.debug(`bot.quit failed during intruder disconnect: ${err.message}`);
+        }
         setTimeout(() => { if (!shutdownRequested) createBot(); }, delay);
       }
     });

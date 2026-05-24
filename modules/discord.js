@@ -156,6 +156,7 @@ class DiscordBot {
     if (message.author.bot) return;
 
     // Only respond in the configured channel
+    if (!this.config.discord.channel_id) return;
     if (message.channel.id !== this.config.discord.channel_id) return;
 
     // Check prefix
@@ -166,7 +167,7 @@ class DiscordBot {
     const args = message.content.slice(prefix.length).trim().split(/\s+/);
     const targetPlayer = args[0];
 
-    if (!targetPlayer) {
+    if (!targetPlayer || !/^[a-zA-Z0-9_]{1,16}$/.test(targetPlayer)) {
       await this._sendUsage(message, prefix);
       return;
     }
