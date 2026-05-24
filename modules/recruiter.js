@@ -1,18 +1,19 @@
 const crypto = require('crypto');
 
-const INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const MESSAGE = 'The GIA wants YOU! Become a member today';
 
 class Recruiter {
-  constructor(bot, logger) {
+  constructor(bot, config, logger) {
     this.bot = bot;
     this.logger = logger;
+    this._intervalMs = config?.recruiter?.interval_ms ?? DEFAULT_INTERVAL_MS;
     this._timer = null;
   }
 
   start() {
     if (this._timer) return;
-    this._timer = setInterval(() => this.send(), INTERVAL_MS);
+    this._timer = setInterval(() => this.send(), this._intervalMs);
     if (this._timer.unref) this._timer.unref();
   }
 
