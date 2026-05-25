@@ -38,6 +38,11 @@ function createBot() {
     username: config.bot.username,
     auth: authType,
     version: config.bot.version,
+    // 2b2t reports enforcesSecureChat: false, so unsigned messages are accepted.
+    // Disabling chat signing skips fetching Mojang profile key certificates,
+    // which means client.profileKeys stays null and _signedChat sends chat_message
+    // packets without a signature — no signature chain for the proxy to break.
+    disableChatSigning: true,
   };
 
   if (authType === 'mojang') {
@@ -59,61 +64,10 @@ function createBot() {
     else if (newState === 'play') bot.physicsEnabled = true;
   });
 
-  // Handle the proxy transition from queue server to game server.
-  // Velocity sends a second Play Login (0x2c) when switching backends.
-  // minecraft-protocol's once('login') in play.js handles the first one.
-  //
-  // Strategy: keep the session UUID that play.js established (Velocity already
-  // told the game server about that UUID via player_info). Only reset the index
-  // and clear the seen-messages buffer so queue-server acknowledgements don't
-  // corrupt the signing payload. No new chat_session_update is needed because
-  // Velocity propagated the session to the backend automatically.
-  let _firstLoginSeen = false;
+  // Log enforcesSecureChat from each login packet for observability.
   bot._client.on('login', (packet) => {
     logger.info(`Server login — enforcesSecureChat: ${packet.enforcesSecureChat}`);
-
-    if (!_firstLoginSeen) {
-      _firstLoginSeen = true;
-      logger.info('First login (queue server) — session initialised by protocol layer');
-      return;
-    }
-
-    // Game server login after proxy transition
-    const client = bot._client;
-    const sessionUUID = client._session?.uuid ?? '(none)';
-    const sessionIndex = client._session?.index ?? '(none)';
-    logger.info(`Game server login — existing session: uuid=${sessionUUID} index=${sessionIndex}`);
-
-    // Reset the message index so the game server (which has never seen messages
-    // from this session) accepts index 0 as the first valid message.
-    if (client._session) {
-      client._session.index = 0;
-    }
-
-    // Clear queue-server player_chat signatures from the seen-messages buffer.
-    if (client._lastSeenMessages) {
-      client._lastSeenMessages.length = 0;
-      client._lastSeenMessages.offset = 0;
-      client._lastSeenMessages.pending = 0;
-    }
-    client._lastChatSignature = null;
-
-    logger.info(`Game server login — session ready: uuid=${client._session?.uuid ?? '(none)'} index=0 profileKeys=${!!client.profileKeys}`);
   });
-
-  // Intercept outgoing chat_message packets for diagnostics.
-  // Remove this block once chat is confirmed working.
-  const _origWrite = bot._client.write.bind(bot._client);
-  bot._client.write = function (name, params) {
-    if (name === 'chat_message') {
-      logger.info(
-        `[CHAT-TX] msg="${params.message}" sig=${params.signature ? params.signature.length + 'B' : 'none'} ` +
-        `offset=${params.offset} ack=${params.acknowledged?.toString('hex') ?? 'none'} ` +
-        `session=${bot._client._session ? bot._client._session.uuid.slice(0, 8) + '…idx' + (bot._client._session.index - 1) : 'null'}`
-      );
-    }
-    return _origWrite(name, params);
-  };
 
   bot.once('spawn', () => {
     hasSpawned = true;
