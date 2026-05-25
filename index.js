@@ -67,30 +67,14 @@ function createBot() {
     else if (newState === 'play') bot.physicsEnabled = true;
   });
 
-  // Log each login and re-establish chat session with the game server.
-  // play.js sends chat_session_update on the FIRST login (queue server) via once('login').
-  // Velocity switches the backend after queue but the game server needs its own session
-  // registration — re-send chat_session_update on every login after the first.
+  // Log each login event.
+  // play.js sends chat_session_update for login #1 (queue server) via once('login').
+  // For the game server (login #2), we re-register at spawn in bindModules so the
+  // write interceptor can log [PKT-OUT] and confirm the packet actually goes out.
   let _loginCount = 0;
   bot._client.on('login', (packet) => {
     _loginCount++;
     logger.info(`Server login #${_loginCount} — enforcesSecureChat: ${packet.enforcesSecureChat}`);
-    if (_loginCount >= 2) {
-      const c = bot._client;
-      if (c.profileKeys && c._session) {
-        const { v4fast } = require('uuid-1345');
-        c._session = { index: 0, uuid: v4fast() };
-        c.write('chat_session_update', {
-          sessionUUID: c._session.uuid,
-          expireTime: BigInt(c.profileKeys.expiresOn.getTime()),
-          publicKey: c.profileKeys.public.export({ type: 'spki', format: 'der' }),
-          signature: c.profileKeys.signatureV2,
-        });
-        logger.info(`[SESSION] Sent chat_session_update for game server (login #${_loginCount}) uuid=${c._session.uuid}`);
-      } else {
-        logger.warn(`[SESSION] Login #${_loginCount} — profileKeys=${!!c.profileKeys} _session=${JSON.stringify(c._session)} — cannot re-send session update`);
-      }
-    }
   });
 
   bot.once('spawn', () => {
@@ -162,6 +146,23 @@ function installWriteInterceptor(bot) {
 
 function bindModules(bot) {
   installWriteInterceptor(bot);
+
+  // Register a fresh chat session with the game server.
+  // Sending at spawn (not at login) guarantees the play-state serializer is active
+  // and the [PKT-OUT] interceptor above can confirm the packet is actually written.
+  const c = bot._client;
+  if (c.profileKeys) {
+    const { v4fast } = require('uuid-1345');
+    c._session = { index: 0, uuid: v4fast() };
+    c.write('chat_session_update', {
+      sessionUUID: c._session.uuid,
+      expireTime: BigInt(c.profileKeys.expiresOn.getTime()),
+      publicKey: c.profileKeys.public.export({ type: 'spki', format: 'der' }),
+      signature: c.profileKeys.signatureV2,
+    });
+  } else {
+    logger.warn('[SESSION] No profileKeys — chat will be unsigned');
+  }
 
   // Move chat/teleport listeners to the new bot instance.
   if (_chatListenerBot && _chatListenerBot !== bot) {
