@@ -50,6 +50,9 @@ class CommandHandler extends EventEmitter {
 
   _handleChat = (msg, msgObj, jsonMsg) => {
     const sender = this._extractSender(msg, jsonMsg);
+    if (typeof msg === 'string' && msg.includes('!')) {
+      this.logger.info(`[CMD-DBG] rcvd type=${msgObj} sender=${sender} msg=${msg.substring(0, 80)}`);
+    }
     if (!sender) return;
 
     const command = this._parseCommand(msg, sender);
