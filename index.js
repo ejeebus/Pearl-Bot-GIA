@@ -120,6 +120,17 @@ function onBotReady(bot) {
     }
   }, 4000);
 
+  // Intercept outgoing chat/command packets so we can confirm they're actually being written.
+  // This wraps bot._client.write at the per-bot level; unhook on end to avoid leaks.
+  const origWrite = bot._client.write.bind(bot._client);
+  bot._client.write = function patchedWrite(name, params) {
+    if (name === 'chat_message' || name === 'chat_command' || name === 'chat_command_signed') {
+      logger.info(`[PKT-OUT] ${name} msg=${JSON.stringify(params?.message ?? params?.command)} sig=${params?.signature ? 'YES' : 'NO'} offset=${params?.offset}`);
+    }
+    return origWrite(name, params);
+  };
+  bot.once('end', () => { bot._client.write = origWrite; });
+
   bot.on('messagestr', (msg) => {
     if (msg.length < 200) {
       logger.chat(msg);
