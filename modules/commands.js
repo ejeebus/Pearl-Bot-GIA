@@ -84,7 +84,7 @@ class CommandHandler extends EventEmitter {
     if (command.target === '__chattest') {
       const c = this.bot._client;
       this.logger.info(`[CHATTEST] state=${c.state} session=${JSON.stringify(c._session)} profileKeys=${!!c.profileKeys} physicsEnabled=${this.bot.physicsEnabled}`);
-      this.logger.info(`[CHATTEST] lastSeenMessages.pending=${c._lastSeenMessages?.pending} chatFn=${c.chat?.name || 'unknown'}`);
+      this.logger.info(`[CHATTEST] lastSeenMessages.pending=${c._lastSeenMessages?.pending} chatFn=${c.chat?.name || 'unknown'} writeFn=${c.write?.name || 'unknown'} serializerWritable=${c.serializer?.writable}`);
       // Path 1: bot.chat → chat_message packet
       try {
         const ts = Date.now();
