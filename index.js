@@ -26,6 +26,14 @@ const whitelist = new WhitelistManager(config);
 let pearlScanner, trapdoorController, commandHandler, antiAfk, queueHandler, intruderDetector, recruiter;
 let currentBot = null;
 let shutdownRequested = false;
+let _chatListenerBot = null;  // track which bot the messagestr/playerTeleport listeners are on
+
+function _chatListener(msg) {
+  if (msg.length < 200) logger.chat(msg);
+}
+function _teleportListener(player) {
+  logger.info(`Player ${player.username} teleported`);
+}
 
 const discordBot = new DiscordBot(config, whitelist, null, null, logger);
 
@@ -38,11 +46,6 @@ function createBot() {
     username: config.bot.username,
     auth: authType,
     version: config.bot.version,
-    // 2b2t reports enforcesSecureChat: false, so unsigned messages are accepted.
-    // Disabling chat signing skips fetching Mojang profile key certificates,
-    // which means client.profileKeys stays null and _signedChat sends chat_message
-    // packets without a signature — no signature chain for the proxy to break.
-    disableChatSigning: true,
   };
 
   if (authType === 'mojang') {
@@ -64,9 +67,30 @@ function createBot() {
     else if (newState === 'play') bot.physicsEnabled = true;
   });
 
-  // Log enforcesSecureChat from each login packet for observability.
+  // Log each login and re-establish chat session with the game server.
+  // play.js sends chat_session_update on the FIRST login (queue server) via once('login').
+  // Velocity switches the backend after queue but the game server needs its own session
+  // registration — re-send chat_session_update on every login after the first.
+  let _loginCount = 0;
   bot._client.on('login', (packet) => {
-    logger.info(`Server login — enforcesSecureChat: ${packet.enforcesSecureChat}`);
+    _loginCount++;
+    logger.info(`Server login #${_loginCount} — enforcesSecureChat: ${packet.enforcesSecureChat}`);
+    if (_loginCount >= 2) {
+      const c = bot._client;
+      if (c.profileKeys && c._session) {
+        const { v4fast } = require('uuid-1345');
+        c._session = { index: 0, uuid: v4fast() };
+        c.write('chat_session_update', {
+          sessionUUID: c._session.uuid,
+          expireTime: BigInt(c.profileKeys.expiresOn.getTime()),
+          publicKey: c.profileKeys.public.export({ type: 'spki', format: 'der' }),
+          signature: c.profileKeys.signatureV2,
+        });
+        logger.info(`[SESSION] Sent chat_session_update for game server (login #${_loginCount}) uuid=${c._session.uuid}`);
+      } else {
+        logger.warn(`[SESSION] Login #${_loginCount} — profileKeys=${!!c.profileKeys} _session=${JSON.stringify(c._session)} — cannot re-send session update`);
+      }
+    }
   });
 
   bot.once('spawn', () => {
@@ -103,18 +127,54 @@ function onBotReady(bot) {
 
   bindModules(bot);
 
-  bot.on('messagestr', (msg) => {
-    if (msg.length < 200) {
-      logger.chat(msg);
+  // Walk briefly after spawning to clear 2b2t's per-session login mute.
+  setTimeout(() => {
+    try {
+      logger.info('Login-mute walk: moving forward briefly');
+      bot.setControlState('forward', true);
+      setTimeout(() => {
+        try { bot.setControlState('forward', false); } catch {}
+        logger.info('Login-mute walk: complete');
+      }, 1500);
+    } catch (err) {
+      logger.warn(`Login-mute walk failed: ${err.message}`);
     }
-  });
+  }, 4000);
+}
 
-  bot.on('playerTeleport', (player) => {
-    logger.info(`Player ${player.username} teleported`);
-  });
+function installWriteInterceptor(bot) {
+  // Patch bot._client.write with .call() so 'this' is always the client instance,
+  // avoiding binding issues. Re-called each time bindModules runs so the interceptor
+  // survives reconnects (new bot instances).
+  const client = bot._client;
+  if (client._writePatched) return; // already patched for this client
+  client._writePatched = true;
+  const origWrite = client.write;
+  client.write = function patchedWrite(name, params) {
+    if (name === 'chat_message' || name === 'chat_command' || name === 'chat_command_signed') {
+      logger.info(`[PKT-OUT] ${name} serializer.writable=${this.serializer?.writable} msg=${JSON.stringify(params?.message ?? params?.command)} sig=${params?.signature ? 'YES' : 'NO'}`);
+    } else if (name === 'chat_session_update') {
+      logger.info(`[PKT-OUT] chat_session_update uuid=${params?.sessionUUID}`);
+    }
+    return origWrite.call(this, name, params);
+  };
 }
 
 function bindModules(bot) {
+  installWriteInterceptor(bot);
+
+  // Move chat/teleport listeners to the new bot instance.
+  if (_chatListenerBot && _chatListenerBot !== bot) {
+    _chatListenerBot.removeListener('messagestr', _chatListener);
+    _chatListenerBot.removeListener('playerTeleport', _teleportListener);
+    logger.info(`[BIND] Moved messagestr listener from old bot to new bot`);
+  }
+  if (_chatListenerBot !== bot) {
+    bot.on('messagestr', _chatListener);
+    bot.on('playerTeleport', _teleportListener);
+    _chatListenerBot = bot;
+  }
+
   if (pearlScanner) pearlScanner.stopScanning();
   if (commandHandler) commandHandler.stop();
   if (antiAfk) antiAfk.stop();
