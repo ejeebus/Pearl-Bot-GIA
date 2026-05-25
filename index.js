@@ -26,6 +26,14 @@ const whitelist = new WhitelistManager(config);
 let pearlScanner, trapdoorController, commandHandler, antiAfk, queueHandler, intruderDetector, recruiter;
 let currentBot = null;
 let shutdownRequested = false;
+let _chatListenerBot = null;  // track which bot the messagestr/playerTeleport listeners are on
+
+function _chatListener(msg) {
+  if (msg.length < 200) logger.chat(msg);
+}
+function _teleportListener(player) {
+  logger.info(`Player ${player.username} teleported`);
+}
 
 const discordBot = new DiscordBot(config, whitelist, null, null, logger);
 
@@ -119,16 +127,6 @@ function onBotReady(bot) {
       logger.warn(`Login-mute walk failed: ${err.message}`);
     }
   }, 4000);
-
-  bot.on('messagestr', (msg) => {
-    if (msg.length < 200) {
-      logger.chat(msg);
-    }
-  });
-
-  bot.on('playerTeleport', (player) => {
-    logger.info(`Player ${player.username} teleported`);
-  });
 }
 
 function installWriteInterceptor(bot) {
@@ -149,6 +147,18 @@ function installWriteInterceptor(bot) {
 
 function bindModules(bot) {
   installWriteInterceptor(bot);
+
+  // Move chat/teleport listeners to the new bot instance.
+  if (_chatListenerBot && _chatListenerBot !== bot) {
+    _chatListenerBot.removeListener('messagestr', _chatListener);
+    _chatListenerBot.removeListener('playerTeleport', _teleportListener);
+    logger.info(`[BIND] Moved messagestr listener from old bot to new bot`);
+  }
+  if (_chatListenerBot !== bot) {
+    bot.on('messagestr', _chatListener);
+    bot.on('playerTeleport', _teleportListener);
+    _chatListenerBot = bot;
+  }
 
   if (pearlScanner) pearlScanner.stopScanning();
   if (commandHandler) commandHandler.stop();
