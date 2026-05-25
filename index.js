@@ -46,11 +46,6 @@ function createBot() {
     username: config.bot.username,
     auth: authType,
     version: config.bot.version,
-    // 2b2t reports enforcesSecureChat: false, so unsigned messages are accepted.
-    // Disabling chat signing skips fetching Mojang profile key certificates,
-    // which means client.profileKeys stays null and _signedChat sends chat_message
-    // packets without a signature — no signature chain for the proxy to break.
-    disableChatSigning: true,
   };
 
   if (authType === 'mojang') {
@@ -72,9 +67,30 @@ function createBot() {
     else if (newState === 'play') bot.physicsEnabled = true;
   });
 
-  // Log enforcesSecureChat from each login packet for observability.
+  // Log each login and re-establish chat session with the game server.
+  // play.js sends chat_session_update on the FIRST login (queue server) via once('login').
+  // Velocity switches the backend after queue but the game server needs its own session
+  // registration — re-send chat_session_update on every login after the first.
+  let _loginCount = 0;
   bot._client.on('login', (packet) => {
-    logger.info(`Server login — enforcesSecureChat: ${packet.enforcesSecureChat}`);
+    _loginCount++;
+    logger.info(`Server login #${_loginCount} — enforcesSecureChat: ${packet.enforcesSecureChat}`);
+    if (_loginCount >= 2) {
+      const c = bot._client;
+      if (c.profileKeys && c._session) {
+        const { v4fast } = require('uuid-1345');
+        c._session = { index: 0, uuid: v4fast() };
+        c.write('chat_session_update', {
+          sessionUUID: c._session.uuid,
+          expireTime: BigInt(c.profileKeys.expiresOn.getTime()),
+          publicKey: c.profileKeys.public.export({ type: 'spki', format: 'der' }),
+          signature: c.profileKeys.signatureV2,
+        });
+        logger.info(`[SESSION] Sent chat_session_update for game server (login #${_loginCount}) uuid=${c._session.uuid}`);
+      } else {
+        logger.warn(`[SESSION] Login #${_loginCount} — profileKeys=${!!c.profileKeys} _session=${JSON.stringify(c._session)} — cannot re-send session update`);
+      }
+    }
   });
 
   bot.once('spawn', () => {
