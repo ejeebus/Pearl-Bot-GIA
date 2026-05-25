@@ -120,17 +120,6 @@ function onBotReady(bot) {
     }
   }, 4000);
 
-  // Intercept outgoing chat/command packets so we can confirm they're actually being written.
-  // This wraps bot._client.write at the per-bot level; unhook on end to avoid leaks.
-  const origWrite = bot._client.write.bind(bot._client);
-  bot._client.write = function patchedWrite(name, params) {
-    if (name === 'chat_message' || name === 'chat_command' || name === 'chat_command_signed') {
-      logger.info(`[PKT-OUT] ${name} msg=${JSON.stringify(params?.message ?? params?.command)} sig=${params?.signature ? 'YES' : 'NO'} offset=${params?.offset}`);
-    }
-    return origWrite(name, params);
-  };
-  bot.once('end', () => { bot._client.write = origWrite; });
-
   bot.on('messagestr', (msg) => {
     if (msg.length < 200) {
       logger.chat(msg);
@@ -142,7 +131,25 @@ function onBotReady(bot) {
   });
 }
 
+function installWriteInterceptor(bot) {
+  // Patch bot._client.write with .call() so 'this' is always the client instance,
+  // avoiding binding issues. Re-called each time bindModules runs so the interceptor
+  // survives reconnects (new bot instances).
+  const client = bot._client;
+  if (client._writePatched) return; // already patched for this client
+  client._writePatched = true;
+  const origWrite = client.write;
+  client.write = function patchedWrite(name, params) {
+    if (name === 'chat_message' || name === 'chat_command' || name === 'chat_command_signed') {
+      logger.info(`[PKT-OUT] ${name} serializer.writable=${this.serializer?.writable} msg=${JSON.stringify(params?.message ?? params?.command)} sig=${params?.signature ? 'YES' : 'NO'}`);
+    }
+    return origWrite.call(this, name, params);
+  };
+}
+
 function bindModules(bot) {
+  installWriteInterceptor(bot);
+
   if (pearlScanner) pearlScanner.stopScanning();
   if (commandHandler) commandHandler.stop();
   if (antiAfk) antiAfk.stop();
