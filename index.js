@@ -112,9 +112,6 @@ function onBotReady(bot) {
   bindModules(bot);
 
   // Walk briefly after spawning to clear 2b2t's per-session login mute.
-  // 2b2t soft-mutes every client on login until position-change packets arrive;
-  // without this the bot can receive chat but all outgoing chat_message packets
-  // are silently dropped regardless of signing state.
   setTimeout(() => {
     try {
       logger.info('Login-mute walk: moving forward briefly');
@@ -127,6 +124,25 @@ function onBotReady(bot) {
       logger.warn(`Login-mute walk failed: ${err.message}`);
     }
   }, 4000);
+
+  // 30-second auto-test: bypass all abstractions and write raw chat_message packet.
+  // Shows in [PKT-OUT] and tells us if the packet reaches the network without needing
+  // any commands. Also logs full client state at that moment for diagnostics.
+  setTimeout(() => {
+    const c = bot._client;
+    logger.info(`[AUTO] state=${c.state} serializerWritable=${c.serializer?.writable} writeFn=${c.write?.name} chatFn=${c.chat?.name} session=${JSON.stringify(c._session)} profileKeys=${!!c.profileKeys}`);
+    logger.info(`[AUTO] bot.entity.position=${bot.entity?.position?.floored()}`);
+    try {
+      bot.chat('autotest ' + Date.now());
+      logger.info('[AUTO] bot.chat() sent without exception');
+    } catch (err) {
+      logger.error(`[AUTO] bot.chat() threw: ${err.message}`);
+    }
+  }, 30000);
+
+  // Raw client-level chat packet listeners — confirm messages arrive before mineflayer processing.
+  bot._client.on('player_chat', () => logger.info('[RAW-IN] player_chat packet received'));
+  bot._client.on('system_chat', () => logger.info('[RAW-IN] system_chat packet received'));
 }
 
 function installWriteInterceptor(bot) {
