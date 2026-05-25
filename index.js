@@ -140,39 +140,6 @@ function onBotReady(bot) {
       logger.warn(`Login-mute walk failed: ${err.message}`);
     }
   }, 4000);
-
-  // 30-second auto-test: try both chat_message and chat_command packets.
-  // chat_message = bot.chat('text'), chat_command = bot.chat('/say text')
-  // If one works and the other doesn't, the issue is packet-type specific.
-  setTimeout(() => {
-    const c = bot._client;
-    logger.info(`[AUTO] state=${c.state} serializerWritable=${c.serializer?.writable} writeFn=${c.write?.name} chatFn=${c.chat?.name} session=${JSON.stringify(c._session)} profileKeys=${!!c.profileKeys}`);
-    logger.info(`[AUTO] bot.entity.position=${bot.entity?.position?.floored()}`);
-    // Test 1: chat_message packet
-    try {
-      bot.chat('autotest-chat ' + Date.now());
-      logger.info('[AUTO] bot.chat() (chat_message) called');
-    } catch (err) {
-      logger.error(`[AUTO] bot.chat() threw: ${err.message}`);
-    }
-    // Test 2: chat_command packet via /say (2 seconds later)
-    setTimeout(() => {
-      try {
-        bot.chat('/say autotest-cmd ' + Date.now());
-        logger.info('[AUTO] bot.chat(/say) (chat_command) called');
-      } catch (err) {
-        logger.error(`[AUTO] bot.chat(/say) threw: ${err.message}`);
-      }
-    }, 2000);
-    // Test 3: check if own message echoes back as system_chat (5 seconds later)
-    setTimeout(() => {
-      logger.info('[AUTO] echo-check window — any [RAW-IN] above this line means server broadcast our msg');
-    }, 5000);
-  }, 30000);
-
-  // Raw client-level chat packet listeners — confirm messages arrive before mineflayer processing.
-  bot._client.on('player_chat', () => logger.info('[RAW-IN] player_chat packet received'));
-  bot._client.on('system_chat', () => logger.info('[RAW-IN] system_chat packet received'));
 }
 
 function installWriteInterceptor(bot) {
