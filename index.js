@@ -103,6 +103,23 @@ function onBotReady(bot) {
 
   bindModules(bot);
 
+  // Walk briefly after spawning to clear 2b2t's per-session login mute.
+  // 2b2t soft-mutes every client on login until position-change packets arrive;
+  // without this the bot can receive chat but all outgoing chat_message packets
+  // are silently dropped regardless of signing state.
+  setTimeout(() => {
+    try {
+      logger.info('Login-mute walk: moving forward briefly');
+      bot.setControlState('forward', true);
+      setTimeout(() => {
+        try { bot.setControlState('forward', false); } catch {}
+        logger.info('Login-mute walk: complete');
+      }, 1500);
+    } catch (err) {
+      logger.warn(`Login-mute walk failed: ${err.message}`);
+    }
+  }, 4000);
+
   bot.on('messagestr', (msg) => {
     if (msg.length < 200) {
       logger.chat(msg);
