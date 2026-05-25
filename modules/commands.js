@@ -80,6 +80,41 @@ class CommandHandler extends EventEmitter {
       return;
     }
 
+    // !chattest — diagnostic: log client state and try both chat packet paths
+    if (command.target === '__chattest') {
+      const c = this.bot._client;
+      this.logger.info(`[CHATTEST] state=${c.state} session=${JSON.stringify(c._session)} profileKeys=${!!c.profileKeys} physicsEnabled=${this.bot.physicsEnabled}`);
+      this.logger.info(`[CHATTEST] lastSeenMessages.pending=${c._lastSeenMessages?.pending} chatFn=${c.chat?.name || 'unknown'}`);
+      // Path 1: bot.chat → chat_message packet
+      try {
+        const ts = Date.now();
+        this.bot.chat(`chattest ${ts}`);
+        this.logger.info(`[CHATTEST] bot.chat() called without exception ts=${ts}`);
+      } catch (err) {
+        this.logger.error(`[CHATTEST] bot.chat() threw: ${err.message}`);
+      }
+      // Path 2: bot.whisper → /tell → chat_command packet
+      setTimeout(() => {
+        try {
+          this.bot.whisper(command.sender, `whisper-test ${Date.now()}`);
+          this.logger.info(`[CHATTEST] bot.whisper() called without exception`);
+        } catch (err) {
+          this.logger.error(`[CHATTEST] bot.whisper() threw: ${err.message}`);
+        }
+      }, 1000);
+      // Path 3: raw /say command
+      setTimeout(() => {
+        try {
+          this.bot.chat('/say saytest');
+          this.logger.info(`[CHATTEST] /say sent without exception`);
+        } catch (err) {
+          this.logger.error(`[CHATTEST] /say threw: ${err.message}`);
+        }
+      }, 2000);
+      this._lastChatTime = now;
+      return;
+    }
+
     // !pearls — list all tracked pearls for debugging
     if (command.target === '__list') {
       const known = this.pearlScanner.getKnownPearls();
@@ -205,6 +240,10 @@ class CommandHandler extends EventEmitter {
     // !recruit — trigger recruitment message immediately
     match = text.match(/^!recruit\s*$/i);
     if (match) return { sender, target: '__recruit' };
+
+    // !chattest — diagnostic chat path test
+    match = text.match(/^!chattest\s*$/i);
+    if (match) return { sender, target: '__chattest' };
 
     // !pearls — list all tracked pearls
     match = text.match(/^!pearls\s*$/i);
