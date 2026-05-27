@@ -1,13 +1,14 @@
 const crypto = require('crypto');
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
-const MESSAGE = 'The GIA wants YOU! Become a member today| discord.gg/5Sqbgd6eTa';
+const DEFAULT_MESSAGE = 'The GIA wants YOU! Become a member today';
 
 class Recruiter {
   constructor(bot, config, logger) {
     this.bot = bot;
     this.logger = logger;
     this._intervalMs = config?.recruiter?.interval_ms ?? DEFAULT_INTERVAL_MS;
+    this._message = config?.recruiter?.message ?? DEFAULT_MESSAGE;
     this._timer = null;
   }
 
@@ -26,13 +27,32 @@ class Recruiter {
 
   send() {
     const hash = crypto.randomBytes(6).toString('hex');
-    const msg = `${MESSAGE} [${hash}]`;
+    const msg = `${this._message} [${hash}]`;
+    let echoed = false;
+
+    const onMessage = (rawMsg) => {
+      if (rawMsg.includes(hash)) {
+        echoed = true;
+        this.logger.info(`[RECRUIT] Server confirmed broadcast [${hash}]`);
+      }
+    };
+
     try {
+      this.bot.on('messagestr', onMessage);
       this.bot.chat(msg);
       this.logger.info(`Sent recruitment message [${hash}]`);
     } catch (err) {
+      this.bot.removeListener('messagestr', onMessage);
       this.logger.error(`Failed to send recruitment message: ${err.message}`);
+      return;
     }
+
+    setTimeout(() => {
+      this.bot.removeListener('messagestr', onMessage);
+      if (!echoed) {
+        this.logger.warn(`[RECRUIT] No echo for [${hash}] — server dropped or filtered the message`);
+      }
+    }, 5000);
   }
 }
 

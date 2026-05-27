@@ -25,6 +25,10 @@
       "DiscordUsername2"
     ]
   },
+  "recruiter": {
+    "message": "The GIA wants YOU! Become a member today",
+    "interval_ms": 300000
+  },
   "anti_afk": {
     "enabled": true,
     "interval_ms": 300000,
