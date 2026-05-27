@@ -88,12 +88,14 @@ function createBot() {
     logger.error(`Bot error: ${err.message}`);
   });
 
-  // If disconnected before spawn (e.g. kicked while in 2b2t queue), reconnect manually
-  // since QueueHandler only attaches after spawn. Guard with a flag because both
-  // 'kicked' and 'end' can fire for the same disconnect.
+  // If disconnected before spawn (e.g. kicked while in 2b2t queue), reconnect manually.
+  // Guard with a flag because both 'kicked' and 'end' can fire for the same disconnect.
+  // Skip if queueHandler is already watching this bot — it will schedule its own reconnect
+  // and firing here too would create a second concurrent bot ("already connected" loop).
   let reconnectScheduled = false;
   const onPreSpawnDisconnect = (reason) => {
     if (hasSpawned || shutdownRequested || reconnectScheduled) return;
+    if (queueHandler && queueHandler.bot === bot) return;
     reconnectScheduled = true;
     const reasonStr = typeof reason === 'string' ? reason : (reason ? JSON.stringify(reason) : 'unknown');
     logger.warn(`Disconnected before spawn: ${reasonStr} — reconnecting in 30s`);
