@@ -149,9 +149,14 @@ function installWriteInterceptor(bot) {
 function bindModules(bot) {
   installWriteInterceptor(bot);
 
-  // Register a fresh chat session with the game server.
-  // Sending at spawn (not at login) guarantees the play-state serializer is active
-  // and the [PKT-OUT] interceptor above can confirm the packet is actually written.
+  // Register a fresh chat session so the server knows who we are, then immediately
+  // clear _session to force unsigned chat_message packets (signature: undefined).
+  //
+  // Background: signed messages (sig=YES) are silently dropped by 2b2t despite a valid
+  // chat_session_update being sent — Velocity likely intercepts and fails to verify the
+  // signature before it reaches the game backend. chat_command packets are unaffected.
+  // With enforcesSecureChat=false, unsigned messages from a session-registered player
+  // should be accepted as unverified chat (same as vanilla with secure-profile disabled).
   const c = bot._client;
   if (c.profileKeys) {
     const { v4fast } = require('uuid-1345');
@@ -162,6 +167,9 @@ function bindModules(bot) {
       publicKey: c.profileKeys.public.export({ type: 'spki', format: 'der' }),
       signature: c.profileKeys.signatureV2,
     });
+    // Clear session → _signedChat sends signature: undefined (unsigned).
+    c._session = null;
+    logger.info(`[SESSION] Registered session then cleared — sending unsigned chat (enforcesSecureChat=false)`);
   } else {
     logger.warn('[SESSION] No profileKeys — chat will be unsigned');
   }
