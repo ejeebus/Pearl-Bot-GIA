@@ -28,9 +28,6 @@ class Recruiter {
   send() {
     const hash = crypto.randomBytes(6).toString('hex');
     const msg = `${this._message} [${hash}]`;
-    // Use /me because 2b2t silently drops chat_message packets (signed and unsigned)
-    // but accepts chat_command packets. /me broadcasts as "* BotName <msg>".
-    const cmd = `/me ${msg}`;
     let echoed = false;
 
     const onMessage = (rawMsg) => {
@@ -42,7 +39,7 @@ class Recruiter {
 
     try {
       this.bot.on('messagestr', onMessage);
-      this.bot.chat(cmd);
+      this.bot.chat(msg);
       this.logger.info(`Sent recruitment message [${hash}]`);
     } catch (err) {
       this.bot.removeListener('messagestr', onMessage);

@@ -88,14 +88,12 @@ function createBot() {
     logger.error(`Bot error: ${err.message}`);
   });
 
-  // If disconnected before spawn (e.g. kicked while in 2b2t queue), reconnect manually.
-  // Guard with a flag because both 'kicked' and 'end' can fire for the same disconnect.
-  // Skip if queueHandler is already watching this bot — it will schedule its own reconnect
-  // and firing here too would create a second concurrent bot ("already connected" loop).
+  // If disconnected before spawn (e.g. kicked while in 2b2t queue), reconnect manually
+  // since QueueHandler only attaches after spawn. Guard with a flag because both
+  // 'kicked' and 'end' can fire for the same disconnect.
   let reconnectScheduled = false;
   const onPreSpawnDisconnect = (reason) => {
     if (hasSpawned || shutdownRequested || reconnectScheduled) return;
-    if (queueHandler && queueHandler.bot === bot) return;
     reconnectScheduled = true;
     const reasonStr = typeof reason === 'string' ? reason : (reason ? JSON.stringify(reason) : 'unknown');
     logger.warn(`Disconnected before spawn: ${reasonStr} — reconnecting in 30s`);
@@ -149,29 +147,27 @@ function installWriteInterceptor(bot) {
 function bindModules(bot) {
   installWriteInterceptor(bot);
 
-  // Register a fresh chat session so the server knows who we are, then immediately
-  // clear _session to force unsigned chat_message packets (signature: undefined).
-  //
-  // Background: signed messages (sig=YES) are silently dropped by 2b2t despite a valid
-  // chat_session_update being sent — Velocity likely intercepts and fails to verify the
-  // signature before it reaches the game backend. chat_command packets are unaffected.
-  // With enforcesSecureChat=false, unsigned messages from a session-registered player
-  // should be accepted as unverified chat (same as vanilla with secure-profile disabled).
   const c = bot._client;
   if (c.profileKeys) {
     const { v4fast } = require('uuid-1345');
     c._session = { index: 0, uuid: v4fast() };
+    // Reset the last-seen-messages ring buffer so queue-server player_chat
+    // signatures don't contaminate the game-server session. Including stale
+    // signatures in the 'acknowledged' bitset causes Velocity to reject our
+    // outbound chat_message packets even when the message signature itself
+    // is otherwise valid.
+    for (let i = 0; i < 20; i++) c._lastSeenMessages[i] = undefined;
+    c._lastSeenMessages.offset = 0;
+    c._lastSeenMessages.pending = 0;
     c.write('chat_session_update', {
       sessionUUID: c._session.uuid,
       expireTime: BigInt(c.profileKeys.expiresOn.getTime()),
       publicKey: c.profileKeys.public.export({ type: 'spki', format: 'der' }),
       signature: c.profileKeys.signatureV2,
     });
-    // Clear session → _signedChat sends signature: undefined (unsigned).
-    c._session = null;
-    logger.info(`[SESSION] Registered session then cleared — sending unsigned chat (enforcesSecureChat=false)`);
+    logger.info(`[SESSION] Session ${c._session.uuid} registered — outbound chat will be signed`);
   } else {
-    logger.warn('[SESSION] No profileKeys — chat will be unsigned');
+    logger.warn('[SESSION] No profileKeys — chat will be unsigned (may be rejected by Velocity)');
   }
 
   // Move chat/teleport listeners to the new bot instance.
