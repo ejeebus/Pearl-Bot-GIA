@@ -4,7 +4,7 @@
     "auth": "microsoft",
     "host": "2b2t.org",
     "port": 25565,
-    "version": "1.20.1"
+    "version": "1.21.4"
   },
   "stasis": {
     "chamber_center": {

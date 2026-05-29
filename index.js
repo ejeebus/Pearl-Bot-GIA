@@ -46,6 +46,13 @@ function createBot() {
     username: config.bot.username,
     auth: authType,
     version: config.bot.version,
+    // 2b2t's Velocity proxy silently drops chat_message packets from clients
+    // that have registered a signing session but send unsigned messages (or
+    // whose signatures fail Velocity's validation). Disabling chat signing
+    // skips the Mojang certificate fetch entirely so no chat_session_update
+    // is ever sent — Velocity then treats us as a session-less client and
+    // forwards unsigned chat_message packets normally (server enforcesSecureChat=false).
+    disableChatSigning: true,
   };
 
   if (authType === 'mojang') {
@@ -146,29 +153,6 @@ function installWriteInterceptor(bot) {
 
 function bindModules(bot) {
   installWriteInterceptor(bot);
-
-  const c = bot._client;
-  if (c.profileKeys) {
-    const { v4fast } = require('uuid-1345');
-    c._session = { index: 0, uuid: v4fast() };
-    // Reset the last-seen-messages ring buffer so queue-server player_chat
-    // signatures don't contaminate the game-server session. Including stale
-    // signatures in the 'acknowledged' bitset causes Velocity to reject our
-    // outbound chat_message packets even when the message signature itself
-    // is otherwise valid.
-    for (let i = 0; i < 20; i++) c._lastSeenMessages[i] = undefined;
-    c._lastSeenMessages.offset = 0;
-    c._lastSeenMessages.pending = 0;
-    c.write('chat_session_update', {
-      sessionUUID: c._session.uuid,
-      expireTime: BigInt(c.profileKeys.expiresOn.getTime()),
-      publicKey: c.profileKeys.public.export({ type: 'spki', format: 'der' }),
-      signature: c.profileKeys.signatureV2,
-    });
-    logger.info(`[SESSION] Session ${c._session.uuid} registered — outbound chat will be signed`);
-  } else {
-    logger.warn('[SESSION] No profileKeys — chat will be unsigned (may be rejected by Velocity)');
-  }
 
   // Move chat/teleport listeners to the new bot instance.
   if (_chatListenerBot && _chatListenerBot !== bot) {
