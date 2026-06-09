@@ -23,6 +23,12 @@ try {
 const logger = new Logger(config);
 const whitelist = new WhitelistManager(config);
 
+function formatErr(err) {
+  if (!err) return 'unknown';
+  if (err.errors?.length) return err.errors.map(e => e.message || String(e)).join(', ');
+  return err.message || String(err);
+}
+
 let pearlScanner, trapdoorController, commandHandler, antiAfk, queueHandler, intruderDetector, recruiter;
 let currentBot = null;
 let shutdownRequested = false;
@@ -64,7 +70,7 @@ function createBot() {
   const bot = mineflayer.createBot(opts);
   let hasSpawned = false;
 
-  bot._client.on('error', (err) => logger.error(`[CLIENT ERR] ${err.message}`));
+  bot._client.on('error', (err) => logger.error(`[CLIENT ERR] ${formatErr(err)}`));
 
   // Pause physics during configuration state so we don't send position packets
   // to the server while it's not in play state — 2b2t re-enters config after queue
@@ -92,7 +98,7 @@ function createBot() {
   });
 
   bot.on('error', (err) => {
-    logger.error(`Bot error: ${err.message}`);
+    logger.error(`Bot error: ${formatErr(err)}`);
   });
 
   // If disconnected before spawn (e.g. kicked while in 2b2t queue), reconnect manually
@@ -260,7 +266,7 @@ process.on('SIGTERM', () => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  logger.error(`Unhandled rejection: ${reason?.message || reason}`);
+  logger.error(`Unhandled rejection: ${formatErr(reason)}`);
 });
 
 logger.info(`Starting pearl bot — connecting to ${config.bot.host}:${config.bot.port}`);
