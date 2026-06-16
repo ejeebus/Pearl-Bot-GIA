@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "C:\\projects\\pearl-bot\\logs\\.8c66ffa6bfe79e1d297972e05c58ffe5e6317eea-audit.json",
+    "files": [
+        {
+            "date": 1781093385787,
+            "name": "C:\\projects\\pearl-bot\\logs\\application-2026-06-10.log",
+            "hash": "5f10ac85555f0866b5d68de354f12e6f15cf2d65770983046ca720a1e62905f7"
+        },
+        {
+            "date": 1781258369378,
+            "name": "C:\\projects\\pearl-bot\\logs\\application-2026-06-12.log",
+            "hash": "97d83bb32a6f400abfa14cd3f481792230dab434b687f181cb2e5489c3119d90"
+        }
+    ],
+    "hashType": "sha256"
+}

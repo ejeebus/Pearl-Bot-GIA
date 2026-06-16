@@ -1,0 +1,20 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "C:\\projects\\pearl-bot\\logs\\.b3bc13f7fb29bf645b1135886cad1ea4dfa5d15e-audit.json",
+    "files": [
+        {
+            "date": 1781093385792,
+            "name": "C:\\projects\\pearl-bot\\logs\\error-2026-06-10.log",
+            "hash": "45da198bebd35dad2a4e8c41eda5f8dd97bbcb492f59ebe46e63def460a4261b"
+        },
+        {
+            "date": 1781258369380,
+            "name": "C:\\projects\\pearl-bot\\logs\\error-2026-06-12.log",
+            "hash": "f921d2a818a5060c463dde1e4820f846d05cc7c20d22b9188b23eb4596ff9761"
+        }
+    ],
+    "hashType": "sha256"
+}
