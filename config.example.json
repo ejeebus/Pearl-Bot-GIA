@@ -2,7 +2,7 @@
   "bot": {
     "username": "BOT_USERNAME_HERE",
     "auth": "microsoft",
-    "host": "2b2t.org",
+    "host": "ingress.2b2t.org",
     "port": 25565,
     "version": "1.21.4"
   },

@@ -16,8 +16,12 @@ const Logger = require('./modules/logger');
 let config;
 try {
   config = require('./config.json');
-} catch {
-  console.error('[FATAL] config.json not found — copy config.example.json to config.json and fill in your settings.');
+} catch (err) {
+  if (err.code === 'MODULE_NOT_FOUND') {
+    console.error('[FATAL] config.json not found — copy config.example.json to config.json and fill in your settings.');
+  } else {
+    console.error(`[FATAL] config.json could not be loaded: ${err.message}`);
+  }
   process.exit(1);
 }
 const logger = new Logger(config);
@@ -90,10 +94,11 @@ function createBot() {
     logger.info(`Server login #${_loginCount} — enforcesSecureChat: ${packet.enforcesSecureChat}`);
   });
 
-  bot.once('spawn', () => {
+  bot.on('spawn', () => {
+    const isFirst = !hasSpawned;
     hasSpawned = true;
     bot.physicsEnabled = true;
-    logger.info(`Spawned at ${bot.entity.position.floored()}`);
+    logger.info(`${isFirst ? 'Spawned' : 'Re-spawned'} at ${bot.entity.position.floored()}`);
     onBotReady(bot);
   });
 

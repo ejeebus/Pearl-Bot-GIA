@@ -72,7 +72,7 @@ DISCORD_CHANNEL_ID=1234567890
 "bot": {
   "username": "YourBotUsername",
   "auth": "microsoft",
-  "host": "2b2t.org",
+  "host": "ingress.2b2t.org",
   "port": 25565,
   "version": "1.21.4"
 }
