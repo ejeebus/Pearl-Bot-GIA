@@ -94,10 +94,11 @@ function createBot() {
     logger.info(`Server login #${_loginCount} — enforcesSecureChat: ${packet.enforcesSecureChat}`);
   });
 
-  bot.once('spawn', () => {
+  bot.on('spawn', () => {
+    const isFirst = !hasSpawned;
     hasSpawned = true;
     bot.physicsEnabled = true;
-    logger.info(`Spawned at ${bot.entity.position.floored()}`);
+    logger.info(`${isFirst ? 'Spawned' : 'Re-spawned'} at ${bot.entity.position.floored()}`);
     onBotReady(bot);
   });
 
