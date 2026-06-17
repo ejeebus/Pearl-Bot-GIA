@@ -7,10 +7,13 @@
  *   'max-attempts-reached' — all retries exhausted
  *
  * Config (config.queue):
- *   auto_reconnect          boolean  (default true)
- *   max_reconnect_attempts  number   (0 = infinite, default 0)
- *   reconnect_delay_base_ms number   (default 30000)
- *   reconnect_delay_max_ms  number   (default 600000)
+ *   auto_reconnect            boolean  (default true)
+ *   max_reconnect_attempts    number   (0 = infinite, default 0)
+ *   reconnect_delay_base_ms   number   (default 30000)
+ *   reconnect_delay_max_ms    number   (default 600000)
+ *   duplicate_session_delay_ms number  (default 60000) — fixed wait used when
+ *     kicked for an "already connected" / stale-session reason, instead of
+ *     the normal exponential backoff.
  */
 
 const EventEmitter = require('events');
@@ -36,6 +39,7 @@ class QueueHandler extends EventEmitter {
       qc.max_reconnect_attempts !== undefined ? qc.max_reconnect_attempts : 0;
     this._baseDelay = qc.reconnect_delay_base_ms || 30000;
     this._maxDelay = qc.reconnect_delay_max_ms || 600000;
+    this._duplicateSessionDelay = qc.duplicate_session_delay_ms || 60000;
 
     this._reconnecting = false;
     this._attempt = 0;
@@ -94,13 +98,19 @@ class QueueHandler extends EventEmitter {
     const reasonStr =
       typeof reason === 'string' ? reason : JSON.stringify(reason);
     this.logger.warn(`Bot was kicked: ${reasonStr}`);
-    this._handleDisconnect();
+
+    // 2b2t's Velocity proxy kicks with this when a previous session hasn't
+    // timed out yet. Retrying on the normal (short) backoff just re-triggers
+    // the same kick, so force a longer fixed wait for the stale session to clear.
+    const isDuplicateSession = /already connected|duplicate.?login|already online/i.test(reasonStr);
+    this._handleDisconnect(isDuplicateSession ? this._duplicateSessionDelay : null);
   }
 
   /**
    * Uses _reconnecting to prevent stacking when kicked+end fire in sequence.
+   * @param {number|null} forcedDelay - If set, use this delay instead of the computed backoff.
    */
-  _handleDisconnect() {
+  _handleDisconnect(forcedDelay = null) {
     if (this._reconnecting || this._stopped) return;
 
     this._reconnecting = true;
@@ -121,24 +131,33 @@ class QueueHandler extends EventEmitter {
       return;
     }
 
-    this._scheduleReconnect();
+    this._scheduleReconnect(forcedDelay);
   }
 
-  _scheduleReconnect() {
-    const rawDelay = this._baseDelay * Math.pow(1.5, this._attempt - 1);
-    const clampedDelay = Math.min(rawDelay, this._maxDelay);
+  _scheduleReconnect(forcedDelay = null) {
+    let delay;
+    if (forcedDelay != null) {
+      delay = forcedDelay;
+      this.logger.info(
+        `Scheduling reconnect attempt ${this._attempt} in ${(delay / 1000).toFixed(1)}s ` +
+          `(fixed delay — stale session on proxy)`
+      );
+    } else {
+      const rawDelay = this._baseDelay * Math.pow(1.5, this._attempt - 1);
+      const clampedDelay = Math.min(rawDelay, this._maxDelay);
 
-    // Jitter: +/- 20% uniform random
-    const jitterFactor = 1 + (Math.random() * 0.4 - 0.2);
-    const delay = Math.round(clampedDelay * jitterFactor);
+      // Jitter: +/- 20% uniform random
+      const jitterFactor = 1 + (Math.random() * 0.4 - 0.2);
+      delay = Math.round(clampedDelay * jitterFactor);
 
-    this.logger.info(
-      `Scheduling reconnect attempt ${this._attempt} in ` +
-        `${(delay / 1000).toFixed(1)}s ` +
-        `(base: ${this._baseDelay}ms, ` +
-        `raw: ${Math.round(rawDelay)}ms, ` +
-        `jittered: ${delay}ms)`
-    );
+      this.logger.info(
+        `Scheduling reconnect attempt ${this._attempt} in ` +
+          `${(delay / 1000).toFixed(1)}s ` +
+          `(base: ${this._baseDelay}ms, ` +
+          `raw: ${Math.round(rawDelay)}ms, ` +
+          `jittered: ${delay}ms)`
+      );
+    }
 
     this.emit('reconnecting', { attempt: this._attempt, delay });
 
