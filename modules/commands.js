@@ -5,6 +5,7 @@
  */
 
 const EventEmitter = require("events");
+const { extractSender, stripSenderPrefix } = require("./chat-utils");
 
 const VALID_MC_NAME = /^[a-zA-Z0-9_]{1,16}$/;
 function isValidMinecraftName(name) {
@@ -49,7 +50,7 @@ class CommandHandler extends EventEmitter {
   }
 
   _handleChat = (msg, msgObj, jsonMsg) => {
-    const sender = this._extractSender(msg, jsonMsg);
+    const sender = extractSender(msg, jsonMsg);
     if (!sender) return;
 
     const command = this._parseCommand(msg, sender);
@@ -121,63 +122,6 @@ class CommandHandler extends EventEmitter {
   };
 
   /**
-   * Try to extract the chat sender's username from the message.
-   * Priority: jsonMsg structured data > plain-text <PlayerName> pattern.
-   *
-   * @param {string} msg - Plain text of the message
-   * @param {object} jsonMsg - Mineflayer ChatMessage object (or similar)
-   * @returns {string|null}
-   */
-  _extractSender(msg, jsonMsg) {
-    // Attempt structured extraction from Mineflayer ChatMessage
-    try {
-      if (jsonMsg?.json?.translate === "chat.type.text") {
-        const withData = jsonMsg.json.with;
-        if (Array.isArray(withData)) {
-          // Pre-1.19:  ["PlayerName", " message text"]
-          if (withData.length >= 2 && withData[0]?.text) {
-            return withData[0].text;
-          }
-          // 1.19+: ["<PlayerName> message text"]
-          if (withData.length === 1) {
-            const content =
-              typeof withData[0] === "object"
-                ? withData[0].text
-                : String(withData[0]);
-            const match = content.match(/^<([^>]+?)>\s/);
-            if (match) return match[1];
-          }
-        }
-      }
-
-      // Whisper (1.19+): translate key "commands.message.display.incoming"
-      // with[0] = sender name, with[1] = message body
-      if (jsonMsg?.json?.translate === "commands.message.display.incoming") {
-        const withData = jsonMsg.json.with;
-        if (Array.isArray(withData) && withData.length >= 1) {
-          const s = withData[0];
-          const name = typeof s === "string" ? s : (s?.text ?? s?.insertion);
-          if (name) return name;
-        }
-      }
-    } catch {
-      // jsonMsg structure may vary — fall through to text parsing
-    }
-
-    if (typeof msg === "string") {
-      // Public chat fallback: <PlayerName> message
-      const pubMatch = msg.match(/^<([^>]+?)>\s/);
-      if (pubMatch) return pubMatch[1];
-
-      // Whisper fallback: "PlayerName whispers: message" or "PlayerName whispers to you: message"
-      const whisperMatch = msg.match(/^([a-zA-Z0-9_]{1,16}) whispers(?: to you)?:/);
-      if (whisperMatch) return whisperMatch[1];
-    }
-
-    return null;
-  }
-
-  /**
    * Parse pearl command from message text.
    *
    * Supported formats:
@@ -196,9 +140,7 @@ class CommandHandler extends EventEmitter {
     if (typeof msg !== "string") return null;
 
     // Strip public chat prefix (<Name>) or whisper prefix (Name whispers to you:)
-    const text = msg
-      .replace(/^<[^>]+?>\s*/, "")
-      .replace(/^[a-zA-Z0-9_]{1,16} whispers(?: to you)?:\s*/, "");
+    const text = stripSenderPrefix(msg);
 
     let match;
 

@@ -14,6 +14,7 @@
 - **Queue Handler** — Auto-reconnects through the 2b2t queue with exponential backoff
 - **Intruder Detection** — Alerts and optionally disconnects when non-whitelisted players enter render distance
 - **Recruiter** — Sends periodic recruitment messages in global chat
+- **Chat Logging** — Records all server chat to a local SQLite database for later review/search, with optional keyword flagging
 - **Logging** — Dual console + file logging with configurable verbosity
 
 ---
@@ -166,6 +167,27 @@ When a non-whitelisted player enters render distance, the bot sends a Discord al
 }
 ```
 
+#### Chat Logging
+
+```json
+"chat_logging": {
+  "enabled": true,
+  "db_path": "chat-log.db",
+  "flag_keywords": []
+}
+```
+
+Every message seen in server chat is recorded to a local SQLite database (`db_path`) with sender, timestamp, and message body — useful for vetting players or investigating incidents later. Add words/phrases to `flag_keywords` (case-insensitive) to flag matching messages; flagged messages are logged at WARN level and, if Discord is enabled, posted immediately to the configured channel.
+
+Search the log from the command line:
+
+```bash
+node scripts/search-chat.js --sender Notch
+node scripts/search-chat.js --contains "give me"
+node scripts/search-chat.js --flagged
+node scripts/search-chat.js --sender Notch --contains diamond --limit 50
+```
+
 #### Logging
 
 ```json
@@ -242,10 +264,14 @@ Pearl-Bot-GIA/
 ├── index.js              # Entry point — initializes and wires all modules
 ├── config.example.json   # Config template
 ├── .env.example          # Credentials template
+├── scripts/
+│   └── search-chat.js    # CLI tool to search the chat-log database
 └── modules/
     ├── pearl-scanner.js  # Scans for pearl entities and maps owners
     ├── trapdoor.js       # Toggles trapdoors to trigger pearl loads
     ├── commands.js       # In-game chat command handler
+    ├── chat-utils.js     # Shared chat parsing helpers (sender extraction, prefix stripping)
+    ├── chat-logger.js    # Records chat to SQLite, with keyword flagging
     ├── discord.js        # Discord bot integration
     ├── anti-afk.js       # AFK prevention
     ├── queue.js          # 2b2t queue + auto-reconnect
@@ -267,6 +293,8 @@ Pearl-Bot-GIA/
 | Change anti-AFK behavior | `config.json` → `anti_afk.mode` |
 | Enable intruder auto-disconnect | `config.json` → `intruder.auto_disconnect: true` |
 | View bot logs | `pearl-bot.log` (if `logging.log_to_file` is enabled) |
+| Search chat logs | `node scripts/search-chat.js --sender <name>` (see [Chat Logging](#chat-logging)) |
+| Flag keywords in chat | `config.json` → `chat_logging.flag_keywords` array |
 
 ---
 

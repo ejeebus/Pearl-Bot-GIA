@@ -39,7 +39,13 @@
     "auto_reconnect": true,
     "max_reconnect_attempts": 0,
     "reconnect_delay_base_ms": 30000,
-    "reconnect_delay_max_ms": 600000
+    "reconnect_delay_max_ms": 600000,
+    "duplicate_session_delay_ms": 60000
+  },
+  "chat_logging": {
+    "enabled": true,
+    "db_path": "chat-log.db",
+    "flag_keywords": []
   },
   "whitelist": [
     "Player1",

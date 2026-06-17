@@ -11,6 +11,7 @@ const AntiAFK = require('./modules/anti-afk');
 const QueueHandler = require('./modules/queue');
 const IntruderDetector = require('./modules/intruder');
 const Recruiter = require('./modules/recruiter');
+const ChatLogger = require('./modules/chat-logger');
 const Logger = require('./modules/logger');
 
 let config;
@@ -46,6 +47,8 @@ function _teleportListener(player) {
 }
 
 const discordBot = new DiscordBot(config, whitelist, null, null, logger);
+const chatLogger = new ChatLogger(config, logger, discordBot);
+chatLogger.start();
 
 function createBot() {
   const authType = config.bot.auth || 'microsoft';
@@ -177,6 +180,8 @@ function bindModules(bot) {
     _chatListenerBot = bot;
   }
 
+  chatLogger.bind(bot);
+
   if (pearlScanner) pearlScanner.stopScanning();
   if (commandHandler) commandHandler.stop();
   if (antiAfk) antiAfk.stop();
@@ -249,6 +254,7 @@ function cleanup() {
   if (queueHandler) queueHandler.stop();
   if (intruderDetector) intruderDetector.stop();
   if (recruiter) recruiter.stop();
+  if (chatLogger) chatLogger.close();
   if (discordBot) discordBot.stop().catch(() => {});
   if (currentBot && !shutdownRequested) {
     try { currentBot.quit('Graceful shutdown'); } catch {}
