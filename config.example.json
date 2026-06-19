@@ -54,8 +54,7 @@
   ],
   "aura": {
     "enabled": true,
-    "range": 5,
-    "interval_ms": 500
+    "range": 5
   },
   "logging": {
     "level": "info",

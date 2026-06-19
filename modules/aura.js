@@ -1,6 +1,5 @@
 const EventEmitter = require('events');
 
-// Hostile mob types to target — covers all standard overworld/nether threats
 const HOSTILE_TYPES = new Set([
   'zombie', 'zombie_villager', 'husk', 'drowned',
   'skeleton', 'stray', 'bogged',
@@ -14,6 +13,24 @@ const HOSTILE_TYPES = new Set([
   'silverfish', 'warden',
 ]);
 
+// Fallback attack speed (attacks/sec) by item name, used when the server hasn't
+// sent the attribute packet yet. Values match vanilla 1.9+ item data.
+const ITEM_ATTACK_SPEED = {
+  wooden_sword: 1.6,  stone_sword: 1.6,   iron_sword: 1.6,
+  golden_sword: 1.6,  diamond_sword: 1.6, netherite_sword: 1.6,
+  wooden_axe: 0.8,    stone_axe: 0.8,     iron_axe: 0.9,
+  golden_axe: 1.0,    diamond_axe: 1.0,   netherite_axe: 1.0,
+  wooden_pickaxe: 1.2, stone_pickaxe: 1.2, iron_pickaxe: 1.2,
+  golden_pickaxe: 1.2, diamond_pickaxe: 1.2, netherite_pickaxe: 1.2,
+  wooden_shovel: 1.0,  stone_shovel: 1.0,  iron_shovel: 1.0,
+  golden_shovel: 1.0,  diamond_shovel: 1.0, netherite_shovel: 1.0,
+  wooden_hoe: 1.0,     stone_hoe: 2.0,     iron_hoe: 3.0,
+  golden_hoe: 4.0,     diamond_hoe: 4.0,   netherite_hoe: 4.0,
+  trident: 1.1,
+};
+
+const BARE_HAND_SPEED = 4.0; // 5 ticks / 250ms cooldown
+
 class Aura extends EventEmitter {
   constructor(bot, config, logger) {
     super();
@@ -23,28 +40,47 @@ class Aura extends EventEmitter {
     const cfg = config.aura || {};
     this.enabled = cfg.enabled !== false;
     this.range = cfg.range ?? 5;
-    this.intervalMs = cfg.interval_ms ?? 500;
 
-    this._timer = null;
-    this._bound_onEntityHurt = this._onEntityHurt.bind(this);
+    // Start at Infinity so the first attack fires immediately when a mob is near.
+    this._ticksSinceAttack = Infinity;
+    this._onTick = this._tick.bind(this);
   }
 
   start() {
     if (!this.enabled) return;
-    this._timer = setInterval(() => this._tick(), this.intervalMs);
-    this.logger.info(`Aura started — range: ${this.range}m, interval: ${this.intervalMs}ms`);
+    this.bot.on('physicTick', this._onTick);
+    this.logger.info(`Aura started — range: ${this.range}m`);
   }
 
   stop() {
-    if (this._timer) {
-      clearInterval(this._timer);
-      this._timer = null;
+    this.bot.off('physicTick', this._onTick);
+  }
+
+  // Returns attacks/second for the currently held item.
+  // Priority: server attribute (most accurate) → item table → bare-hand default.
+  _attackSpeed() {
+    const attr = this.bot.entity?.attributes?.['minecraft:generic.attack_speed'];
+    if (attr?.value != null) return attr.value;
+
+    const item = this.bot.heldItem;
+    if (item) {
+      const speed = ITEM_ATTACK_SPEED[item.name];
+      if (speed != null) return speed;
     }
+
+    return BARE_HAND_SPEED;
   }
 
   _tick() {
+    this._ticksSinceAttack++;
+
     const bot = this.bot;
     if (!bot.entity || !bot.physicsEnabled) return;
+
+    // 1.9+ cooldown: full charge needs (20 / attackSpeed) ticks.
+    // We wait until ticksSinceAttack >= cooldownTicks so we always hit at 100%.
+    const cooldownTicks = 20 / this._attackSpeed();
+    if (this._ticksSinceAttack < cooldownTicks) return;
 
     const pos = bot.entity.position;
     let nearest = null;
@@ -67,10 +103,13 @@ class Aura extends EventEmitter {
     if (!nearest) return;
 
     try {
-      // Face the entity before attacking so the server accepts the hit
       bot.lookAt(nearest.position.offset(0, nearest.height / 2, 0), true);
       bot.attack(nearest);
-      this.logger.debug(`Aura: attacked ${nearest.name} at distance ${nearestDist.toFixed(1)}m`);
+      this._ticksSinceAttack = 0;
+      this.logger.debug(
+        `Aura: attacked ${nearest.name} at ${nearestDist.toFixed(1)}m` +
+        ` (cooldown ${cooldownTicks.toFixed(1)} ticks)`
+      );
       this.emit('attack', nearest);
     } catch (err) {
       this.logger.debug(`Aura: attack error — ${err.message}`);
