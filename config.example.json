@@ -52,6 +52,10 @@
     "Player2",
     "Player3"
   ],
+  "aura": {
+    "enabled": true,
+    "range": 5
+  },
   "logging": {
     "level": "info",
     "log_to_file": true,

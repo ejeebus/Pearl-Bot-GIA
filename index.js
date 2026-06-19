@@ -11,6 +11,7 @@ const AntiAFK = require('./modules/anti-afk');
 const QueueHandler = require('./modules/queue');
 const IntruderDetector = require('./modules/intruder');
 const Recruiter = require('./modules/recruiter');
+const Aura = require('./modules/aura');
 const ChatLogger = require('./modules/chat-logger');
 const Logger = require('./modules/logger');
 
@@ -34,7 +35,7 @@ function formatErr(err) {
   return err.message || String(err);
 }
 
-let pearlScanner, trapdoorController, commandHandler, antiAfk, queueHandler, intruderDetector, recruiter;
+let pearlScanner, trapdoorController, commandHandler, antiAfk, queueHandler, intruderDetector, recruiter, aura;
 let currentBot = null;
 let shutdownRequested = false;
 let _chatListenerBot = null;  // track which bot the messagestr/playerTeleport listeners are on
@@ -189,12 +190,15 @@ function bindModules(bot) {
   if (intruderDetector) intruderDetector.stop();
   if (recruiter) recruiter.stop();
 
+  if (aura) aura.stop();
+
   pearlScanner = new PearlScanner(bot, config, logger);
   trapdoorController = new TrapdoorController(bot, logger);
   recruiter = new Recruiter(bot, config, logger);
   commandHandler = new CommandHandler(bot, whitelist, pearlScanner, trapdoorController, recruiter, logger);
   antiAfk = new AntiAFK(bot, config.anti_afk, logger);
   intruderDetector = new IntruderDetector(bot, whitelist, logger);
+  aura = new Aura(bot, config, logger);
 
   discordBot.pearlScanner = pearlScanner;
   discordBot.trapdoorController = trapdoorController;
@@ -203,6 +207,7 @@ function bindModules(bot) {
   commandHandler.start();
   antiAfk.start();
   recruiter.start();
+  aura.start();
 
   if (config.intruder?.enabled !== false) {
     intruderDetector.start();
@@ -254,6 +259,7 @@ function cleanup() {
   if (queueHandler) queueHandler.stop();
   if (intruderDetector) intruderDetector.stop();
   if (recruiter) recruiter.stop();
+  if (aura) aura.stop();
   if (chatLogger) chatLogger.close();
   if (discordBot) discordBot.stop().catch(() => {});
   if (currentBot && !shutdownRequested) {
