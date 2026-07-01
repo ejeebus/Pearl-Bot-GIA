@@ -48,7 +48,6 @@ class QueueHandler extends EventEmitter {
 
     this._onEnd = this._onEnd.bind(this);
     this._onKicked = this._onKicked.bind(this);
-    this._onChatMessage = this._onChatMessage.bind(this);
     this._onSpawn = this._onSpawn.bind(this);
   }
 
@@ -72,13 +71,11 @@ class QueueHandler extends EventEmitter {
   _attachHandlers(botInstance) {
     botInstance.on('end', this._onEnd);
     botInstance.on('kicked', this._onKicked);
-    botInstance.on('messagestr', this._onChatMessage);
   }
 
   _detachHandlers(botInstance) {
     botInstance.removeListener('end', this._onEnd);
     botInstance.removeListener('kicked', this._onKicked);
-    botInstance.removeListener('messagestr', this._onChatMessage);
     botInstance.removeListener('spawn', this._onSpawn);
   }
 
@@ -215,17 +212,6 @@ class QueueHandler extends EventEmitter {
     this.logger.info('Bot successfully joined the server');
     this._attempt = 0;
     this.emit('reconnected', this.bot);
-  }
-
-  /**
-   * 2b2t queue positions appear as "Position in queue: 42" or "Your position is #13"
-   */
-  _onChatMessage(message) {
-    const match = message.match(/(?:position in queue|queue position|your position)[:\s]+(?:is\s+)?#?(\d+)/i);
-    if (match) {
-      const position = parseInt(match[1], 10);
-      this.logger.chat(`Queue position: #${position}`);
-    }
   }
 }
 

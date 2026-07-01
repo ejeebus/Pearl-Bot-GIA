@@ -9,6 +9,7 @@ const CommandHandler = require('./modules/commands');
 const DiscordBot = require('./modules/discord');
 const AntiAFK = require('./modules/anti-afk');
 const QueueHandler = require('./modules/queue');
+const QueueMonitor = require('./modules/queue-monitor');
 const IntruderDetector = require('./modules/intruder');
 const Recruiter = require('./modules/recruiter');
 const Aura = require('./modules/aura');
@@ -51,6 +52,11 @@ const discordBot = new DiscordBot(config, whitelist, null, null, logger);
 const chatLogger = new ChatLogger(config, logger, discordBot);
 chatLogger.start();
 
+// Live queue-position counter. Created once and re-attached to each new bot.
+// Must attach at bot-creation time (below) because 2b2t's queue runs *before*
+// spawn — QueueHandler wires up post-spawn and would miss the whole queue.
+const queueMonitor = new QueueMonitor(config, logger);
+
 function createBot() {
   const authType = config.bot.auth || 'microsoft';
 
@@ -78,6 +84,9 @@ function createBot() {
   const bot = mineflayer.createBot(opts);
   let hasSpawned = false;
 
+  // Attach the live queue counter before spawn so it tracks the whole queue.
+  queueMonitor.attach(bot);
+
   bot._client.on('error', (err) => logger.error(`[CLIENT ERR] ${formatErr(err)}`));
 
   // Pause physics during configuration state so we don't send position packets
@@ -102,6 +111,7 @@ function createBot() {
     const isFirst = !hasSpawned;
     hasSpawned = true;
     bot.physicsEnabled = true;
+    queueMonitor.onSpawn(); // queue finished — stop the counter, log completion
     logger.info(`${isFirst ? 'Spawned' : 'Re-spawned'} at ${bot.entity.position.floored()}`);
     onBotReady(bot);
   });
@@ -117,6 +127,7 @@ function createBot() {
   const onPreSpawnDisconnect = (reason) => {
     if (hasSpawned || shutdownRequested || reconnectScheduled) return;
     reconnectScheduled = true;
+    queueMonitor.detach(); // stop tracking the dead connection's queue
     const reasonStr = typeof reason === 'string' ? reason : (reason ? JSON.stringify(reason) : 'unknown');
     logger.warn(`Disconnected before spawn: ${reasonStr} — reconnecting in 30s`);
     setTimeout(() => { if (!shutdownRequested) createBot(); }, 30000);
@@ -257,6 +268,7 @@ function cleanup() {
   if (commandHandler) commandHandler.stop();
   if (antiAfk) antiAfk.stop();
   if (queueHandler) queueHandler.stop();
+  if (queueMonitor) queueMonitor.stop();
   if (intruderDetector) intruderDetector.stop();
   if (recruiter) recruiter.stop();
   if (aura) aura.stop();

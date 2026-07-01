@@ -40,7 +40,9 @@
     "max_reconnect_attempts": 0,
     "reconnect_delay_base_ms": 30000,
     "reconnect_delay_max_ms": 600000,
-    "duplicate_session_delay_ms": 60000
+    "duplicate_session_delay_ms": 60000,
+    "queue_heartbeat_ms": 60000,
+    "queue_stuck_timeout_ms": 900000
   },
   "chat_logging": {
     "enabled": true,

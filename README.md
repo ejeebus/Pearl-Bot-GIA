@@ -140,11 +140,34 @@ Set `mode` to a single value, or omit it to rotate through `modes` automatically
   "auto_reconnect": true,
   "max_reconnect_attempts": 0,
   "reconnect_delay_base_ms": 30000,
-  "reconnect_delay_max_ms": 600000
+  "reconnect_delay_max_ms": 600000,
+  "queue_heartbeat_ms": 60000,
+  "queue_stuck_timeout_ms": 900000
 }
 ```
 
 `max_reconnect_attempts: 0` means infinite retries. Reconnect delay uses exponential backoff with ±20% jitter.
+
+#### Live queue counter
+
+While waiting in the 2b2t queue the bot logs a live position counter, read from
+the server's tab-list footer (2b2t reports the position there, not in chat):
+
+```
+[QUEUE] In queue — position 312, server ETA 2h 40m
+[QUEUE] Position: 311  -1  ~2.4/min  ETA ~2h09m
+[QUEUE] Position: 310  -1  ~2.4/min  ETA ~2h08m
+[QUEUE] Reached the front — connecting to the server
+```
+
+Each line shows the current position, the change since the last update, the
+observed movement rate, and an ETA estimated from that rate (falling back to
+2b2t's own ETA text until enough samples are collected).
+
+| Key | Meaning |
+|-----|---------|
+| `queue_heartbeat_ms` | How often to re-log the position when it hasn't changed, so the log shows the bot is alive during static stretches (default 60s; `0` disables). |
+| `queue_stuck_timeout_ms` | If the position hasn't advanced for this long, log a WARN — usually a 2b2t restart or a frozen queue (default 15m; `0` disables). |
 
 #### Intruder Detection
 
