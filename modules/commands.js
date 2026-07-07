@@ -142,7 +142,9 @@ class CommandHandler extends EventEmitter {
     try { this.bot.chat(`Loading pearl for ${command.target}`); } catch (err) { this.logger.error(`Chat send failed: ${err.message}`); }
     this._lastChatTime = now;
 
-    this.trapdoorController.loadPearl(command.target, pearlData.trapdoorBlock)
+    // Route through the owning PearlBot so the bot pathfinds to the trapdoor and
+    // returns to center; fall back to the raw controller in standalone mode.
+    (this.pearlBot ?? this.trapdoorController).loadPearl(command.target, pearlData.trapdoorBlock)
       .catch((err) => {
         this.logger.error(`Pearl load failed for ${command.target}: ${err.message}`);
       });

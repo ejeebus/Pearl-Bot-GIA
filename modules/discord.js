@@ -201,18 +201,21 @@ class DiscordBot {
       // Resolve the pearl and the controller that owns it. In multi-bot mode
       // the network points us at the right chamber; otherwise fall back to the
       // single injected scanner/controller.
+      // `loader` exposes loadPearl(name, block). In multi-bot mode it's the
+      // owning PearlBot (which pathfinds to the trapdoor and returns to center);
+      // in standalone mode it's the raw trapdoor controller.
       let pearlData;
-      let trapdoorController;
+      let loader;
       if (this.network) {
         const owner = this.network.findOwner(targetPlayer);
         pearlData = owner?.pearl ?? null;
-        trapdoorController = owner?.bot.trapdoorController ?? null;
+        loader = owner?.bot ?? null;
       } else {
         pearlData = this.pearlScanner.getPearlForPlayer(targetPlayer);
-        trapdoorController = this.trapdoorController;
+        loader = this.trapdoorController;
       }
 
-      if (!pearlData || !trapdoorController) {
+      if (!pearlData || !loader) {
         this.logger.info(
           `No pearl found for "${targetPlayer}" (requested by "${requesterName}")`,
         );
@@ -220,7 +223,7 @@ class DiscordBot {
         return;
       }
 
-      await trapdoorController.loadPearl(targetPlayer, pearlData.trapdoorBlock);
+      await loader.loadPearl(targetPlayer, pearlData.trapdoorBlock);
 
       await this._sendSuccess(message, targetPlayer, requesterName, pearlData);
       this.logger.info(

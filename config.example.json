@@ -14,7 +14,8 @@
           "z": 0
         },
         "scan_radius": 15,
-        "scan_interval_ms": 3000
+        "scan_interval_ms": 3000,
+        "reach_range": 3
       }
     },
     {
@@ -31,7 +32,8 @@
           "z": -200
         },
         "scan_radius": 15,
-        "scan_interval_ms": 3000
+        "scan_interval_ms": 3000,
+        "reach_range": 3
       },
       "recruiter": {
         "enabled": false
