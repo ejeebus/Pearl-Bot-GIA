@@ -332,7 +332,7 @@ class PearlBot {
       bot, this.whitelist, this.pearlScanner, this.trapdoorController, this.recruiter, this.logger,
       { network: this.network, pearlBot: this }
     );
-    this.antiAfk = new AntiAFK(bot, this.config.anti_afk, this.logger);
+    this.antiAfk = new AntiAFK(bot, this.config, this.logger);
     this.intruderDetector = new IntruderDetector(bot, this.whitelist, this.logger);
     this.aura = new Aura(bot, this.config, this._taggedLogger);
 

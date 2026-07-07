@@ -1,89 +1,60 @@
 /**
- * AntiAFK - Prevents the bot from being kicked for idling.
+ * AntiAFK - Keeps the bot from being kicked for idling on 2b2t.
  *
- * Performs subtle periodic actions (look around, sneak toggle, small jump,
- * chat ping) to appear active while staying in the stasis chamber position.
+ * IMPORTANT (2b2t mechanics): rotating the head or jumping in place does NOT
+ * reset 2b2t's AFK timer — with no real activity you're kicked within ~5
+ * minutes, and even continuous walking is kicked at ~30 minutes. The reliable
+ * anti-AFK methods are BLOCK INTERACTIONS: breaking/placing, or toggling a
+ * door/lever/trapdoor. So each interval this module:
  *
- * The bot never moves from its position — no walking, pathfinding, or block
- * interactions. All actions are local movements or network pings.
+ *   1. Toggles a dedicated lever/door/trapdoor (config: stasis.afk_toggle) —
+ *      the reliable anti-kick. Place it next to the bot; it must NOT be a
+ *      trapdoor sitting above a stored pearl.
+ *   2. Optionally paces one sneaked step back-and-forth so the bot visibly
+ *      moves without walking off a ledge (config: anti_afk.patrol, default on).
+ *   3. Swings its arm — a cheap extra activity ping.
  *
- * Modes:
- *   look_around   — vary yaw/pitch by ±0.5 radians via bot.look()
- *   sneak_toggle  — quickly sneak then unsneak via setControlState
- *   small_jump    — jump in place via setControlState (200ms duration)
- *   chat_ping     — send a minimal chat message for network activity
+ * Config:
+ *   anti_afk.enabled      boolean  (default true)
+ *   anti_afk.interval_ms  number   (default 120000; keep it under ~4 min)
+ *   anti_afk.patrol       boolean  (default true) — step back-and-forth
+ *   stasis.afk_toggle     {x,y,z}  — block to flip each cycle (recommended)
  */
+
+const Vec3 = require('vec3');
 
 class AntiAFK {
   /**
-   * @param {import('mineflayer').Bot} bot - Mineflayer bot instance
-   * @param {object} config - config.anti_afk settings from main config
-   * @param {boolean} [config.enabled] - Whether anti-AFK is enabled
-   * @param {number} [config.interval_ms] - Interval between actions (ms)
-   * @param {string} [config.mode] - Preferred mode name
-   * @param {string[]} [config.modes] - Available mode names
-   * @param {import('./logger.js')} logger - Logger instance
+   * @param {import('mineflayer').Bot} bot
+   * @param {object} config - the full per-bot config (reads config.anti_afk and config.stasis)
+   * @param {import('./logger.js')} logger
    */
   constructor(bot, config, logger) {
     this.bot = bot;
-    this.config = config || {};
     this.logger = logger;
 
-    /** @type {object|null} */
+    const full = config || {};
+    const afk = full.anti_afk || {};
+    const stasis = full.stasis || {};
+
+    this.enabled = afk.enabled !== false;
+    this.intervalMs = afk.interval_ms || 120000;
+    this.doPatrol = afk.patrol !== false;
+
+    // Accept the toggle-block position from stasis.afk_toggle (preferred, since
+    // stasis is always per-bot) or anti_afk.toggle_block (fallback).
+    const t = stasis.afk_toggle || afk.toggle_block || null;
+    this.togglePos =
+      t && typeof t.x === 'number' && typeof t.y === 'number' && typeof t.z === 'number'
+        ? new Vec3(t.x, t.y, t.z)
+        : null;
+
     this._timer = null;
-
-    /** @type {number} Index into modes array for round-robin rotation */
-    this._modeIndex = 0;
-
-    /** @type {number} Accumulator for look_around to produce smooth variation */
-    this._lookTick = 0;
-
-    /** Valid mode names and their handler methods */
-    this._MODE_HANDLERS = {
-      look_around: '_doLookAround',
-      sneak_toggle: '_doSneakToggle',
-      small_jump: '_doSmallJump',
-      chat_ping: '_doChatPing',
-    };
-
-    // Resolve the modes list — fall back to all known modes
-    this._modes = Array.isArray(this.config.modes) && this.config.modes.length > 0
-      ? this.config.modes
-      : Object.keys(this._MODE_HANDLERS);
-
-    // Filter to only known modes, keep order from config
-    this._modes = this._modes.filter((m) => m in this._MODE_HANDLERS);
-
-    // Ensure at least one valid mode exists
-    if (this._modes.length === 0) {
-      this._modes = Object.keys(this._MODE_HANDLERS);
-    }
-
-    // Resolve the preferred mode
-    this._preferredMode = this._resolvePreferredMode(this.config.mode);
-  }
-
-  /**
-   * Resolve the user-configured preferred mode.
-   * If the mode is valid and in the available list, use it exclusively.
-   * Otherwise fall back to round-robin rotation through all available modes.
-   *
-   * @param {string} [mode] - Mode name from config
-   * @returns {string|null} The resolved mode, or null for rotation
-   */
-  _resolvePreferredMode(mode) {
-    if (!mode) return null;
-    const lower = mode.toLowerCase();
-    if (lower in this._MODE_HANDLERS && this._modes.includes(lower)) {
-      return lower;
-    }
-    return null;
+    this._busy = false;
   }
 
   /**
    * Start the anti-AFK loop.
-   * Begins executing periodic actions at the configured interval.
-   *
    * @returns {boolean} true if started, false if disabled or already running
    */
   start() {
@@ -91,171 +62,95 @@ class AntiAFK {
       this.logger.warn('AntiAFK already started');
       return false;
     }
-
-    if (!this.config.enabled) {
+    if (!this.enabled) {
       this.logger.info('AntiAFK disabled by config');
       return false;
     }
 
-    const intervalMs = this.config.interval_ms || 300000;
+    if (!this.togglePos) {
+      this.logger.warn(
+        'AntiAFK: no stasis.afk_toggle configured — on 2b2t the bot will still ' +
+        'get AFK-kicked without a block to interact with. Place a lever next to ' +
+        'the bot and set its coords in stasis.afk_toggle.'
+      );
+    }
 
-    this.logger.debug(
-      `AntiAFK started — interval=${intervalMs}ms mode=${this._preferredMode || 'rotate(' + this._modes.join(',') + ')'}`
+    this.logger.info(
+      `AntiAFK started — every ${Math.round(this.intervalMs / 1000)}s` +
+      `${this.togglePos ? `, toggling block at ${this.togglePos}` : ''}` +
+      `${this.doPatrol ? ', with patrol' : ''}`
     );
 
     this._timer = setInterval(() => {
-      try {
-        this._executeAction();
-      } catch (err) {
-        this.logger.error(`AntiAFK action failed: ${err.message}`);
-      }
-    }, intervalMs);
+      this._tick().catch((err) => this.logger.error(`AntiAFK action failed: ${err.message}`));
+    }, this.intervalMs);
+    if (this._timer.unref) this._timer.unref();
 
     return true;
   }
 
-  /**
-   * Stop the anti-AFK loop.
-   * Clears the interval timer. Safe to call multiple times.
-   */
+  /** Stop the anti-AFK loop. Safe to call multiple times. */
   stop() {
     if (this._timer === null) return;
-
     clearInterval(this._timer);
     this._timer = null;
     this.logger.debug('AntiAFK stopped');
   }
 
-  /**
-   * Dynamically change the anti-AFK mode at runtime.
-   *
-   * @param {string} mode - Mode name to switch to
-   * @returns {boolean} true if the mode was accepted
-   */
-  setMode(mode) {
-    const lower = mode.toLowerCase();
-    if (!(lower in this._MODE_HANDLERS)) {
-      this.logger.warn(`Unknown anti-AFK mode: "${mode}"`);
-      return false;
+  async _tick() {
+    if (this._busy) return; // a slow previous cycle is still running
+    this._busy = true;
+    try {
+      // 1. Arm swing — cheap activity ping.
+      try { this.bot.swingArm('right'); } catch { /* noop */ }
+
+      // 2. Toggle the dedicated block — the reliable 2b2t anti-kick.
+      if (this.togglePos) await this._toggleBlock();
+
+      // 3. Patrol — visibly move without leaving the platform.
+      if (this.doPatrol) await this._patrol();
+    } finally {
+      this._busy = false;
     }
-
-    this._preferredMode = lower;
-    this.logger.debug(`AntiAFK mode changed to: ${lower}`);
-    return true;
   }
 
-  /**
-   * Set to round-robin rotation through all available modes.
-   */
-  setRotation() {
-    this._preferredMode = null;
-    this._modeIndex = 0;
-    this.logger.debug('AntiAFK set to mode rotation');
-  }
-
-  /**
-   * Get the currently active mode(s) description.
-   *
-   * @returns {object} { mode: string, rotating: boolean }
-   */
-  getStatus() {
-    return {
-      mode: this._preferredMode || this._modes[this._modeIndex],
-      rotating: this._preferredMode === null,
-    };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Internal
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Execute a single anti-AFK action.
-   * Uses the preferred mode if set, otherwise round-robins through available modes.
-   */
-  _executeAction() {
-    let mode;
-
-    if (this._preferredMode) {
-      mode = this._preferredMode;
-    } else {
-      mode = this._modes[this._modeIndex];
-      this._modeIndex = (this._modeIndex + 1) % this._modes.length;
-    }
-
-    const handler = this._MODE_HANDLERS[mode];
-    if (!handler) {
-      this.logger.warn(`No handler for anti-AFK mode: "${mode}" — skipping`);
+  async _toggleBlock() {
+    const block = this.bot.blockAt(this.togglePos);
+    if (!block || block.name === 'air') {
+      this.logger.warn(`AntiAFK: no block at ${this.togglePos} (out of render range, or wrong coords)`);
       return;
     }
-
-    this.logger.debug(`AntiAFK action: ${mode}`);
-    this[handler]();
+    try {
+      await this.bot.lookAt(this.togglePos.offset(0.5, 0.5, 0.5), true);
+      await this.bot.activateBlock(block);
+      this.logger.debug(`AntiAFK: toggled ${block.name} at ${this.togglePos}`);
+    } catch (err) {
+      this.logger.warn(`AntiAFK: failed to toggle block at ${this.togglePos}: ${err.message}`);
+    }
   }
 
   /**
-   * Look around — vary yaw and pitch slightly so the bot appears to be
-   * glancing around its environment. Alternates between two yaw offsets
-   * on each tick to create natural-looking head movement.
+   * Step forward then back, sneaking the whole time so the bot can't walk off a
+   * ledge. Symmetric timing keeps it roughly on its original spot.
    */
-  _doLookAround() {
-    const baseYaw = this.bot.entity.yaw;
-    const basePitch = this.bot.entity.pitch;
+  async _patrol() {
+    const hold = (control, ms) => new Promise((resolve) => {
+      try { this.bot.setControlState(control, true); } catch { /* noop */ }
+      setTimeout(() => {
+        try { this.bot.setControlState(control, false); } catch { /* noop */ }
+        resolve();
+      }, ms);
+    });
 
-    // Alternate between swinging left and right of current heading
-    const yawOffset = this._lookTick % 2 === 0 ? 0.5 : -0.5;
-    // Slight random-ish pitch variation
-    const pitchOffset = 0.1 * Math.sin(this._lookTick * 0.5);
-
-    const yaw = baseYaw + yawOffset;
-    const pitch = Math.min(Math.max(basePitch + pitchOffset, -Math.PI / 2), Math.PI / 2);
-
-    this.bot.look(yaw, pitch, true);
-
-    this._lookTick++;
-  }
-
-  /**
-   * Sneak toggle — quickly sneak then unsneak.
-   * Sneaking is a low-visibility action that keeps the bot in place.
-   */
-  _doSneakToggle() {
-    this.bot.setControlState('sneak', true);
-
-    // Unsneak after a short delay (100ms is enough to register)
-    setTimeout(() => {
-      try {
-        this.bot.setControlState('sneak', false);
-      } catch (err) {
-        this.logger.error(`AntiAFK unsneak failed: ${err.message}`);
-      }
-    }, 100);
-  }
-
-  /**
-   * Small jump — jump in place briefly.
-   * The bot must stay in the stasis chamber, so the jump is brief and
-   * the bot does not move forward.
-   */
-  _doSmallJump() {
-    this.bot.setControlState('jump', true);
-
-    setTimeout(() => {
-      try {
-        this.bot.setControlState('jump', false);
-      } catch (err) {
-        this.logger.error(`AntiAFK jump release failed: ${err.message}`);
-      }
-    }, 200);
-  }
-
-  /**
-   * Chat ping — send a minimal invisible chat packet to show network activity.
-   * Sends a single dot ('.') which is virtually invisible in a busy server
-   * like 2b2t and will never be noticed in an isolated stasis chamber area.
-   */
-  _doChatPing() {
-    this.bot.chat('.');
+    try { this.bot.setControlState('sneak', true); } catch { /* noop */ }
+    try {
+      await hold('forward', 500);
+      await hold('back', 500);
+    } catch (err) {
+      this.logger.debug(`AntiAFK patrol failed: ${err.message}`);
+    } finally {
+      try { this.bot.setControlState('sneak', false); } catch { /* noop */ }
+    }
   }
 }
 

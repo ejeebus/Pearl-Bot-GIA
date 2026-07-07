@@ -142,20 +142,26 @@ If `discord.whitelist` is omitted, the Minecraft whitelist is used for Discord t
 ```json
 "anti_afk": {
   "enabled": true,
-  "interval_ms": 300000,
-  "mode": "look_around",
-  "modes": ["look_around", "sneak_toggle", "small_jump"]
+  "interval_ms": 120000,
+  "patrol": true
 }
 ```
 
-| Mode | Description |
-|------|-------------|
-| `look_around` | Slightly varies yaw/pitch |
-| `sneak_toggle` | Quick sneak then release |
-| `small_jump` | Jumps in place |
-| `chat_ping` | Sends an invisible chat message |
+Each cycle the bot swings its arm, **toggles a dedicated block** (see `afk_toggle` below), and — if `patrol` is on — takes one sneaked step back and forth so it visibly moves without walking off the platform.
 
-Set `mode` to a single value, or omit it to rotate through `modes` automatically.
+> **Why a block toggle?** On 2b2t, rotating the head or jumping in place does **not** reset the AFK timer — you get kicked within ~5 minutes, and even continuous walking is kicked at ~30 minutes. Only **interacting with blocks** (breaking/placing, or toggling a door/lever/trapdoor) reliably keeps you connected. So each bot needs a block to flip.
+
+**Set up the toggle block (per bot):** place a **lever** (or a door, or a spare trapdoor that is **not** above a stored pearl) next to the bot, and put its coordinates in that bot's `stasis.afk_toggle`:
+
+```json
+"stasis": {
+  "chamber_center": { "x": 100, "y": 64, "z": -200 },
+  "scan_radius": 15,
+  "afk_toggle": { "x": 102, "y": 64, "z": -200 }
+}
+```
+
+Keep `interval_ms` under ~4 minutes (default 2 min) so a toggle always lands inside 2b2t's ~5-minute idle window. Without `afk_toggle` the bot logs a warning and will still eventually be AFK-kicked. Set `patrol: false` if you'd rather it not move at all.
 
 #### Queue & Reconnection
 

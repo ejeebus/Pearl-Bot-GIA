@@ -15,7 +15,8 @@
         },
         "scan_radius": 15,
         "scan_interval_ms": 3000,
-        "reach_range": 3
+        "reach_range": 3,
+        "afk_toggle": { "x": 2, "y": 0, "z": 0 }
       }
     },
     {
@@ -33,7 +34,8 @@
         },
         "scan_radius": 15,
         "scan_interval_ms": 3000,
-        "reach_range": 3
+        "reach_range": 3,
+        "afk_toggle": { "x": 102, "y": 64, "z": -200 }
       },
       "recruiter": {
         "enabled": false
@@ -56,9 +58,8 @@
   },
   "anti_afk": {
     "enabled": true,
-    "interval_ms": 300000,
-    "mode": "look_around",
-    "modes": ["look_around", "sneak_toggle", "small_jump"]
+    "interval_ms": 120000,
+    "patrol": true
   },
   "queue": {
     "auto_reconnect": true,
