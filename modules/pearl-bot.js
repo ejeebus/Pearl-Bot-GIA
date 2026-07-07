@@ -24,6 +24,8 @@ const IntruderDetector = require('./intruder');
 const Recruiter = require('./recruiter');
 const QueueMonitor = require('./queue-monitor');
 const Aura = require('./aura');
+const Navigator = require('./navigator');
+const { pathfinder } = require('mineflayer-pathfinder');
 
 function formatErr(err) {
   if (!err) return 'unknown';
@@ -63,6 +65,11 @@ class PearlBot {
     this.intruderDetector = null;
     this.recruiter = null;
     this.aura = null;
+    this.navigator = null;
+
+    // Serializes pearl loads so concurrent chat/Discord requests don't fight
+    // the pathfinder (a second goto mid-path rejects the first with GoalChanged).
+    this._loadQueue = Promise.resolve();
 
     // Queue monitor is per-connection (attached in createBot, before spawn)
     // but the instance is long-lived — each bot has its own queue.
@@ -105,6 +112,53 @@ class PearlBot {
 
   getKnownPearlNames() {
     return this.pearlScanner ? [...this.pearlScanner.getKnownPearls().keys()] : [];
+  }
+
+  /**
+   * Load a player's pearl: walk within reach of the trapdoor, face it, toggle
+   * it, then return to the chamber center. Called by both the in-game command
+   * handler and the Discord bot (via BotNetwork routing). Loads are serialized
+   * per-bot so simultaneous requests don't collide in the pathfinder.
+   *
+   * @param {string} playerName
+   * @param {import('prismarine-block').Block} trapdoorBlock
+   * @returns {Promise<boolean>} whether the trapdoor toggle succeeded
+   */
+  loadPearl(playerName, trapdoorBlock) {
+    const run = this._loadQueue.then(
+      () => this._runLoad(playerName, trapdoorBlock),
+      () => this._runLoad(playerName, trapdoorBlock),
+    );
+    // Keep the chain alive regardless of this run's outcome; the caller still
+    // receives the real result/error through `run`.
+    this._loadQueue = run.catch(() => {});
+    return run;
+  }
+
+  async _runLoad(playerName, trapdoorBlock) {
+    const nav = this.navigator;
+    const afk = this.antiAfk;
+    const reach = this.config.stasis?.reach_range ?? 3;
+    let success = false;
+
+    // Suspend anti-AFK so its sneak/jump/look don't fight the pathfinder.
+    try { afk?.stop(); } catch { /* noop */ }
+    try {
+      if (nav) {
+        await nav.goNear(trapdoorBlock.position, reach);
+        // activateBlock doesn't auto-look; face the trapdoor so 2b2t accepts
+        // the interaction as in-reach and correctly aimed.
+        await this.bot.lookAt(trapdoorBlock.position.offset(0.5, 0.5, 0.5), true);
+      }
+      success = await this.trapdoorController.loadPearl(playerName, trapdoorBlock);
+    } finally {
+      if (nav) {
+        try { await nav.returnToCenter(); }
+        catch (err) { this.logger.warn(this._tag(`returnToCenter failed: ${err.message}`)); }
+      }
+      try { afk?.start(); } catch { /* noop */ }
+    }
+    return success;
   }
 
   // ------------------------------------------------------------------
@@ -154,6 +208,8 @@ class PearlBot {
 
     const bot = mineflayer.createBot(opts);
     this.bot = bot;
+    // Pathfinding plugin — reinstalled on every reconnect (each is a fresh bot).
+    bot.loadPlugin(pathfinder);
     let hasSpawned = false;
 
     // Attach the queue monitor before any spawn handler so it sees the whole
@@ -270,12 +326,13 @@ class PearlBot {
 
     this.pearlScanner = new PearlScanner(bot, this.config, this.logger);
     this.trapdoorController = new TrapdoorController(bot, this.logger);
+    this.navigator = new Navigator(bot, this.config, this._taggedLogger);
     this.recruiter = new Recruiter(bot, this.config, this.logger);
     this.commandHandler = new CommandHandler(
       bot, this.whitelist, this.pearlScanner, this.trapdoorController, this.recruiter, this.logger,
       { network: this.network, pearlBot: this }
     );
-    this.antiAfk = new AntiAFK(bot, this.config.anti_afk, this.logger);
+    this.antiAfk = new AntiAFK(bot, this.config, this.logger);
     this.intruderDetector = new IntruderDetector(bot, this.whitelist, this.logger);
     this.aura = new Aura(bot, this.config, this._taggedLogger);
 

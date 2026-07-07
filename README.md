@@ -9,6 +9,7 @@
 
 - **Pearl Scanner** — Continuously scans the stasis chamber for ender pearl entities and maps them to their owners
 - **Pearl Loading** — Opens the trapdoor above a pearl to trigger teleportation, then resets it automatically
+- **Pathfinding** — Walks to the requested pearl's trapdoor (via `mineflayer-pathfinder`), loads it, and returns to the chamber center — so it works even in large chambers where trapdoors are out of reach
 - **Discord Integration** — Request pearl loads from a Discord channel with permission-gated commands
 - **Anti-AFK** — Cycles through subtle actions (look, sneak, jump) to prevent idle kicks
 - **Queue Handler** — Auto-reconnects through the 2b2t queue with exponential backoff
@@ -105,6 +106,10 @@ The bot runs one or more accounts in a single process — each account watches i
 
 - **Each bot needs its own Microsoft account** — two bots can't share one login. Set each account via its `username`. On first run, each bot prints a `microsoft.com/link` device code to the console; sign in once and the token is cached.
 - Set each bot's `stasis.chamber_center` to the center of *its* chamber. Pearl requests (in-game or Discord) are automatically routed to whichever bot owns the target player's pearl.
+- When a pearl is requested, the bot **pathfinds to that pearl's trapdoor**, loads it, then **returns to `chamber_center`**. This makes `chamber_center` a real standing spot the bot returns to — make sure it's somewhere the bot can actually stand. Optional per-bot `stasis` keys tune this:
+  - `reach_range` (default `3`) — how close the bot gets to a trapdoor before activating it. Must stay under ~4.5 (Minecraft reach). Increase if the nearest standable block is a bit far; decrease for tighter aim.
+  - `home` `{x,y,z}` (default `chamber_center`) — an explicit spot to return to, if the center isn't where you want the bot to idle.
+  - `home_radius` (default `1`) — how close to `home` counts as "arrived".
 - Each bot inherits the shared top-level `anti_afk` / `queue` / `intruder` / `recruiter` blocks, but any bot can override one by including it in its own entry (e.g. `"recruiter": { "enabled": false }` above so only one bot sends recruitment messages).
 - The **first bot** in the list is the "primary" — it's the single responder for `!pearls` lists and "no pearl found" replies so multiple bots don't answer at once.
 
@@ -137,20 +142,26 @@ If `discord.whitelist` is omitted, the Minecraft whitelist is used for Discord t
 ```json
 "anti_afk": {
   "enabled": true,
-  "interval_ms": 300000,
-  "mode": "look_around",
-  "modes": ["look_around", "sneak_toggle", "small_jump"]
+  "interval_ms": 120000,
+  "patrol": true
 }
 ```
 
-| Mode | Description |
-|------|-------------|
-| `look_around` | Slightly varies yaw/pitch |
-| `sneak_toggle` | Quick sneak then release |
-| `small_jump` | Jumps in place |
-| `chat_ping` | Sends an invisible chat message |
+Each cycle the bot swings its arm, **toggles a dedicated block** (see `afk_toggle` below), and — if `patrol` is on — takes one sneaked step back and forth so it visibly moves without walking off the platform.
 
-Set `mode` to a single value, or omit it to rotate through `modes` automatically.
+> **Why a block toggle?** On 2b2t, rotating the head or jumping in place does **not** reset the AFK timer — you get kicked within ~5 minutes, and even continuous walking is kicked at ~30 minutes. Only **interacting with blocks** (breaking/placing, or toggling a door/lever/trapdoor) reliably keeps you connected. So each bot needs a block to flip.
+
+**Set up the toggle block (per bot):** place a **lever** (or a door, or a spare trapdoor that is **not** above a stored pearl) next to the bot, and put its coordinates in that bot's `stasis.afk_toggle`:
+
+```json
+"stasis": {
+  "chamber_center": { "x": 100, "y": 64, "z": -200 },
+  "scan_radius": 15,
+  "afk_toggle": { "x": 102, "y": 64, "z": -200 }
+}
+```
+
+Keep `interval_ms` under ~4 minutes (default 2 min) so a toggle always lands inside 2b2t's ~5-minute idle window. Without `afk_toggle` the bot logs a warning and will still eventually be AFK-kicked. Set `patrol: false` if you'd rather it not move at all.
 
 #### Queue & Reconnection
 
@@ -313,6 +324,7 @@ Pearl-Bot-GIA/
     ├── network.js        # Coordinates bots; routes pearl requests to the owning chamber
     ├── pearl-scanner.js  # Scans for pearl entities and maps owners
     ├── trapdoor.js       # Toggles trapdoors to trigger pearl loads
+    ├── navigator.js      # Pathfinds to a trapdoor and back to chamber center
     ├── commands.js       # In-game chat command handler
     ├── chat-utils.js     # Shared chat parsing helpers (sender extraction, prefix stripping)
     ├── chat-logger.js    # Records chat to SQLite, with keyword flagging
