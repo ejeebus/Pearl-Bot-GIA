@@ -1,20 +1,43 @@
 {
-  "bot": {
-    "username": "BOT_USERNAME_HERE",
-    "auth": "microsoft",
-    "host": "ingress.2b2t.org",
-    "port": 25565,
-    "version": "1.21.4"
-  },
-  "stasis": {
-    "chamber_center": {
-      "x": 0,
-      "y": 0,
-      "z": 0
+  "bots": [
+    {
+      "name": "chamber-1",
+      "username": "BOT1_USERNAME_OR_EMAIL",
+      "auth": "microsoft",
+      "host": "ingress.2b2t.org",
+      "port": 25565,
+      "version": "1.21.4",
+      "stasis": {
+        "chamber_center": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "scan_radius": 15,
+        "scan_interval_ms": 3000
+      }
     },
-    "scan_radius": 15,
-    "scan_interval_ms": 3000
-  },
+    {
+      "name": "chamber-2",
+      "username": "BOT2_USERNAME_OR_EMAIL",
+      "auth": "microsoft",
+      "host": "ingress.2b2t.org",
+      "port": 25565,
+      "version": "1.21.4",
+      "stasis": {
+        "chamber_center": {
+          "x": 100,
+          "y": 64,
+          "z": -200
+        },
+        "scan_radius": 15,
+        "scan_interval_ms": 3000
+      },
+      "recruiter": {
+        "enabled": false
+      }
+    }
+  ],
   "discord": {
     "enabled": false,
     "token": "DISCORD_BOT_TOKEN_HERE",

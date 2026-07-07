@@ -41,6 +41,10 @@ class DiscordBot {
     this.trapdoorController = trapdoorController;
     this.logger = logger;
     this.client = null;
+    // Set by index.js in multi-bot mode. When present, pearl requests are
+    // routed to whichever bot's chamber owns the target's pearl instead of
+    // using the single pearlScanner/trapdoorController above.
+    this.network = null;
   }
 
   /**
@@ -194,9 +198,21 @@ class DiscordBot {
    */
   async _processPearlRequest(message, targetPlayer, requesterName) {
     try {
-      const pearlData = this.pearlScanner.getPearlForPlayer(targetPlayer);
+      // Resolve the pearl and the controller that owns it. In multi-bot mode
+      // the network points us at the right chamber; otherwise fall back to the
+      // single injected scanner/controller.
+      let pearlData;
+      let trapdoorController;
+      if (this.network) {
+        const owner = this.network.findOwner(targetPlayer);
+        pearlData = owner?.pearl ?? null;
+        trapdoorController = owner?.bot.trapdoorController ?? null;
+      } else {
+        pearlData = this.pearlScanner.getPearlForPlayer(targetPlayer);
+        trapdoorController = this.trapdoorController;
+      }
 
-      if (!pearlData) {
+      if (!pearlData || !trapdoorController) {
         this.logger.info(
           `No pearl found for "${targetPlayer}" (requested by "${requesterName}")`,
         );
@@ -204,7 +220,7 @@ class DiscordBot {
         return;
       }
 
-      await this.trapdoorController.loadPearl(targetPlayer, pearlData.trapdoorBlock);
+      await trapdoorController.loadPearl(targetPlayer, pearlData.trapdoorBlock);
 
       await this._sendSuccess(message, targetPlayer, requesterName, pearlData);
       this.logger.info(

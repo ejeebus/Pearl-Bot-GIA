@@ -67,29 +67,48 @@ DISCORD_CHANNEL_ID=1234567890
 
 ### `config.json` — Bot Settings
 
-#### Bot Connection
+#### Bots & Chambers
+
+The bot runs one or more accounts in a single process — each account watches its own stasis chamber. List them under `bots`:
 
 ```json
-"bot": {
-  "username": "YourBotUsername",
-  "auth": "microsoft",
-  "host": "ingress.2b2t.org",
-  "port": 25565,
-  "version": "1.21.4"
-}
+"bots": [
+  {
+    "name": "chamber-1",
+    "username": "bot1@example.com",
+    "auth": "microsoft",
+    "host": "ingress.2b2t.org",
+    "port": 25565,
+    "version": "1.21.4",
+    "stasis": {
+      "chamber_center": { "x": 0, "y": 0, "z": 0 },
+      "scan_radius": 15,
+      "scan_interval_ms": 3000
+    }
+  },
+  {
+    "name": "chamber-2",
+    "username": "bot2@example.com",
+    "auth": "microsoft",
+    "host": "ingress.2b2t.org",
+    "port": 25565,
+    "version": "1.21.4",
+    "stasis": {
+      "chamber_center": { "x": 100, "y": 64, "z": -200 },
+      "scan_radius": 15,
+      "scan_interval_ms": 3000
+    },
+    "recruiter": { "enabled": false }
+  }
+]
 ```
 
-#### Stasis Chamber
+- **Each bot needs its own Microsoft account** — two bots can't share one login. Set each account via its `username`. On first run, each bot prints a `microsoft.com/link` device code to the console; sign in once and the token is cached.
+- Set each bot's `stasis.chamber_center` to the center of *its* chamber. Pearl requests (in-game or Discord) are automatically routed to whichever bot owns the target player's pearl.
+- Each bot inherits the shared top-level `anti_afk` / `queue` / `intruder` / `recruiter` blocks, but any bot can override one by including it in its own entry (e.g. `"recruiter": { "enabled": false }` above so only one bot sends recruitment messages).
+- The **first bot** in the list is the "primary" — it's the single responder for `!pearls` lists and "no pearl found" replies so multiple bots don't answer at once.
 
-```json
-"stasis": {
-  "chamber_center": { "x": 100, "y": 64, "z": -200 },
-  "scan_radius": 15,
-  "scan_interval_ms": 3000
-}
-```
-
-Set `chamber_center` to the center coordinates of your pearl chamber. The bot will scan within `scan_radius` blocks every `scan_interval_ms` milliseconds.
+> **Single bot?** A legacy `"bot": { ... }` + top-level `"stasis": { ... }` config still works — it's treated as a one-element `bots` list.
 
 #### Whitelist
 
@@ -267,6 +286,8 @@ Pearl-Bot-GIA/
 ├── scripts/
 │   └── search-chat.js    # CLI tool to search the chat-log database
 └── modules/
+    ├── pearl-bot.js      # One bot's lifecycle + its per-bot modules
+    ├── network.js        # Coordinates bots; routes pearl requests to the owning chamber
     ├── pearl-scanner.js  # Scans for pearl entities and maps owners
     ├── trapdoor.js       # Toggles trapdoors to trigger pearl loads
     ├── commands.js       # In-game chat command handler
