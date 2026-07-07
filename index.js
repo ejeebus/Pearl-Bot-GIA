@@ -1,20 +1,11 @@
 require('dotenv').config();
 
-const crypto = require('crypto');
-const mineflayer = require('mineflayer');
-const WhitelistManager = require('./modules/whitelist');
-const PearlScanner = require('./modules/pearl-scanner');
-const TrapdoorController = require('./modules/trapdoor');
-const CommandHandler = require('./modules/commands');
-const DiscordBot = require('./modules/discord');
-const AntiAFK = require('./modules/anti-afk');
-const QueueHandler = require('./modules/queue');
-const QueueMonitor = require('./modules/queue-monitor');
-const IntruderDetector = require('./modules/intruder');
-const Recruiter = require('./modules/recruiter');
-const Aura = require('./modules/aura');
-const ChatLogger = require('./modules/chat-logger');
 const Logger = require('./modules/logger');
+const WhitelistManager = require('./modules/whitelist');
+const DiscordBot = require('./modules/discord');
+const ChatLogger = require('./modules/chat-logger');
+const BotNetwork = require('./modules/network');
+const PearlBot = require('./modules/pearl-bot');
 
 let config;
 try {
@@ -27,269 +18,94 @@ try {
   }
   process.exit(1);
 }
+
 const logger = new Logger(config);
 const whitelist = new WhitelistManager(config);
 
 function formatErr(err) {
   if (!err) return 'unknown';
-  if (err.errors?.length) return err.errors.map(e => e.message || String(e)).join(', ');
+  if (err.errors?.length) return err.errors.map((e) => e.message || String(e)).join(', ');
   return err.message || String(err);
 }
 
-let pearlScanner, trapdoorController, commandHandler, antiAfk, queueHandler, intruderDetector, recruiter, aura;
-let currentBot = null;
-let shutdownRequested = false;
-let _chatListenerBot = null;  // track which bot the messagestr/playerTeleport listeners are on
+/**
+ * Build one effective per-bot config from the shared config. Supports both the
+ * multi-bot shape (`config.bots: [...]`) and the legacy single-bot shape
+ * (`config.bot` + `config.stasis`), so existing config.json files keep working.
+ *
+ * Each bot entry may override any of anti_afk / queue / intruder / recruiter;
+ * otherwise it inherits the shared top-level block.
+ */
+function buildBotConfigs(cfg) {
+  const inherit = (entry, key) => (entry[key] !== undefined ? entry[key] : cfg[key]);
 
-function _chatListener(msg) {
-  if (msg.length < 200) logger.chat(msg);
-}
-function _teleportListener(player) {
-  logger.info(`Player ${player.username} teleported`);
+  let entries;
+  if (Array.isArray(cfg.bots) && cfg.bots.length > 0) {
+    entries = cfg.bots;
+  } else if (cfg.bot) {
+    entries = [{ ...cfg.bot, stasis: cfg.stasis }];
+  } else {
+    throw new Error('No bots configured — add a "bots" array (or a legacy "bot" block) to config.json');
+  }
+
+  return entries.map((entry) => ({
+    bot: {
+      name: entry.name,
+      username: entry.username,
+      auth: entry.auth,
+      host: entry.host,
+      port: entry.port,
+      version: entry.version,
+    },
+    stasis: entry.stasis,
+    anti_afk: inherit(entry, 'anti_afk'),
+    queue: inherit(entry, 'queue'),
+    intruder: inherit(entry, 'intruder'),
+    recruiter: inherit(entry, 'recruiter'),
+    aura: inherit(entry, 'aura'),
+    logging: cfg.logging,
+    discord: cfg.discord,
+    whitelist: cfg.whitelist,
+  }));
 }
 
+let botConfigs;
+try {
+  botConfigs = buildBotConfigs(config);
+} catch (err) {
+  console.error(`[FATAL] ${err.message}`);
+  process.exit(1);
+}
+
+// Shared services — one Discord connection and one chat-log DB for all bots.
+const network = new BotNetwork();
 const discordBot = new DiscordBot(config, whitelist, null, null, logger);
+discordBot.network = network;
 const chatLogger = new ChatLogger(config, logger, discordBot);
 chatLogger.start();
 
-// Live queue-position counter. Created once and re-attached to each new bot.
-// Must attach at bot-creation time (below) because 2b2t's queue runs *before*
-// spawn — QueueHandler wires up post-spawn and would miss the whole queue.
-const queueMonitor = new QueueMonitor(config, logger);
-
-function createBot() {
-  const authType = config.bot.auth || 'microsoft';
-
-  const opts = {
-    host: config.bot.host,
-    port: config.bot.port,
-    username: config.bot.username,
-    auth: authType,
-    version: config.bot.version,
-    // 2b2t's Velocity proxy silently drops chat_message packets from clients
-    // that have registered a signing session but send unsigned messages (or
-    // whose signatures fail Velocity's validation). Disabling chat signing
-    // skips the Mojang certificate fetch entirely so no chat_session_update
-    // is ever sent — Velocity then treats us as a session-less client and
-    // forwards unsigned chat_message packets normally (server enforcesSecureChat=false).
-    disableChatSigning: true,
-  };
-
-  if (authType === 'mojang') {
-    if (process.env.MOJANG_PASSWORD) {
-      opts.password = process.env.MOJANG_PASSWORD;
-    }
-  }
-
-  const bot = mineflayer.createBot(opts);
-  let hasSpawned = false;
-
-  // Attach the live queue counter before spawn so it tracks the whole queue.
-  queueMonitor.attach(bot);
-
-  bot._client.on('error', (err) => logger.error(`[CLIENT ERR] ${formatErr(err)}`));
-
-  // Pause physics during configuration state so we don't send position packets
-  // to the server while it's not in play state — 2b2t re-enters config after queue
-  // and Velocity crashes if it receives unexpected position packets during that phase.
-  bot._client.on('state', (newState) => {
-    if (newState === 'configuration') bot.physicsEnabled = false;
-    else if (newState === 'play') bot.physicsEnabled = true;
-  });
-
-  // Log each login event.
-  // play.js sends chat_session_update for login #1 (queue server) via once('login').
-  // For the game server (login #2), we re-register at spawn in bindModules so the
-  // write interceptor can log [PKT-OUT] and confirm the packet actually goes out.
-  let _loginCount = 0;
-  bot._client.on('login', (packet) => {
-    _loginCount++;
-    logger.info(`Server login #${_loginCount} — enforcesSecureChat: ${packet.enforcesSecureChat}`);
-  });
-
-  bot.on('spawn', () => {
-    const isFirst = !hasSpawned;
-    hasSpawned = true;
-    bot.physicsEnabled = true;
-    queueMonitor.onSpawn(); // queue finished — stop the counter, log completion
-    logger.info(`${isFirst ? 'Spawned' : 'Re-spawned'} at ${bot.entity.position.floored()}`);
-    onBotReady(bot);
-  });
-
-  bot.on('error', (err) => {
-    logger.error(`Bot error: ${formatErr(err)}`);
-  });
-
-  // If disconnected before spawn (e.g. kicked while in 2b2t queue), reconnect manually
-  // since QueueHandler only attaches after spawn. Guard with a flag because both
-  // 'kicked' and 'end' can fire for the same disconnect.
-  let reconnectScheduled = false;
-  const onPreSpawnDisconnect = (reason) => {
-    if (hasSpawned || shutdownRequested || reconnectScheduled) return;
-    reconnectScheduled = true;
-    queueMonitor.detach(); // stop tracking the dead connection's queue
-    const reasonStr = typeof reason === 'string' ? reason : (reason ? JSON.stringify(reason) : 'unknown');
-    logger.warn(`Disconnected before spawn: ${reasonStr} — reconnecting in 30s`);
-    setTimeout(() => { if (!shutdownRequested) createBot(); }, 30000);
-  };
-
-  bot.once('end', onPreSpawnDisconnect);
-  bot.once('kicked', onPreSpawnDisconnect);
-
-  return bot;
-}
-
-function onBotReady(bot) {
-  currentBot = bot;
-
-  bindModules(bot);
-
-  // Walk briefly after spawning to clear 2b2t's per-session login mute.
-  setTimeout(() => {
-    try {
-      logger.info('Login-mute walk: moving forward briefly');
-      bot.setControlState('forward', true);
-      setTimeout(() => {
-        try { bot.setControlState('forward', false); } catch {}
-        logger.info('Login-mute walk: complete');
-      }, 1500);
-    } catch (err) {
-      logger.warn(`Login-mute walk failed: ${err.message}`);
-    }
-  }, 4000);
-}
-
-function installWriteInterceptor(bot) {
-  // Patch bot._client.write with .call() so 'this' is always the client instance,
-  // avoiding binding issues. Re-called each time bindModules runs so the interceptor
-  // survives reconnects (new bot instances).
-  const client = bot._client;
-  if (client._writePatched) return; // already patched for this client
-  client._writePatched = true;
-  const origWrite = client.write;
-  client.write = function patchedWrite(name, params) {
-    if (name === 'chat_message' || name === 'chat_command' || name === 'chat_command_signed') {
-      logger.info(`[PKT-OUT] ${name} serializer.writable=${this.serializer?.writable} msg=${JSON.stringify(params?.message ?? params?.command)} sig=${params?.signature ? 'YES' : 'NO'}`);
-    } else if (name === 'chat_session_update') {
-      logger.info(`[PKT-OUT] chat_session_update uuid=${params?.sessionUUID}`);
-    }
-    return origWrite.call(this, name, params);
-  };
-}
-
-function bindModules(bot) {
-  installWriteInterceptor(bot);
-
-  // Move chat/teleport listeners to the new bot instance.
-  if (_chatListenerBot && _chatListenerBot !== bot) {
-    _chatListenerBot.removeListener('messagestr', _chatListener);
-    _chatListenerBot.removeListener('playerTeleport', _teleportListener);
-    logger.info(`[BIND] Moved messagestr listener from old bot to new bot`);
-  }
-  if (_chatListenerBot !== bot) {
-    bot.on('messagestr', _chatListener);
-    bot.on('playerTeleport', _teleportListener);
-    _chatListenerBot = bot;
-  }
-
-  chatLogger.bind(bot);
-
-  if (pearlScanner) pearlScanner.stopScanning();
-  if (commandHandler) commandHandler.stop();
-  if (antiAfk) antiAfk.stop();
-  if (queueHandler) queueHandler.stop();
-  if (intruderDetector) intruderDetector.stop();
-  if (recruiter) recruiter.stop();
-
-  if (aura) aura.stop();
-
-  pearlScanner = new PearlScanner(bot, config, logger);
-  trapdoorController = new TrapdoorController(bot, logger);
-  recruiter = new Recruiter(bot, config, logger);
-  commandHandler = new CommandHandler(bot, whitelist, pearlScanner, trapdoorController, recruiter, logger);
-  antiAfk = new AntiAFK(bot, config.anti_afk, logger);
-  intruderDetector = new IntruderDetector(bot, whitelist, logger);
-  aura = new Aura(bot, config, logger);
-
-  discordBot.pearlScanner = pearlScanner;
-  discordBot.trapdoorController = trapdoorController;
-
-  pearlScanner.startScanning();
-  commandHandler.start();
-  antiAfk.start();
-  recruiter.start();
-  aura.start();
-
-  if (config.intruder?.enabled !== false) {
-    intruderDetector.start();
-    intruderDetector.on('intruder', (playerName) => {
-      discordBot.sendIntruderAlert(playerName).catch(() => {});
-
-      if (config.intruder?.auto_disconnect) {
-        const delay = config.intruder.reconnect_delay_ms ?? 300000;
-        logger.warn(`Intruder ${playerName} — disconnecting, reconnecting in ${Math.round(delay / 1000)}s`);
-        intruderDetector.stop();
-        if (queueHandler) queueHandler.stop();
-        try { bot.quit('Intruder detected'); } catch (err) {
-          logger.debug(`bot.quit failed during intruder disconnect: ${err.message}`);
-        }
-        setTimeout(() => { if (!shutdownRequested) createBot(); }, delay);
-      }
-    });
-  }
-
-  setupQueueHandler(bot);
-}
-
-function setupQueueHandler(bot) {
-  queueHandler = new QueueHandler(bot, config, createBot, logger);
-
-  queueHandler.on('reconnecting', ({ attempt, delay }) => {
-    logger.info(`Reconnecting (attempt ${attempt}, delay ${Math.round(delay / 1000)}s)...`);
-  });
-
-  queueHandler.on('reconnected', (newBot) => {
-    logger.info('Reconnected — rebinding modules to new bot instance');
-    currentBot = newBot;
-    bindModules(newBot);
-  });
-
-  queueHandler.on('max-attempts-reached', () => {
-    logger.error('Max reconnect attempts exhausted — shutting down');
-    cleanup();
-    process.exit(1);
-  });
-
-  queueHandler.start();
-}
+const shared = { logger, whitelist, discordBot, chatLogger, network };
+const pearlBots = botConfigs.map((botConfig) => {
+  const pearlBot = new PearlBot(botConfig, shared);
+  network.register(pearlBot);
+  return pearlBot;
+});
 
 function cleanup() {
-  if (pearlScanner) pearlScanner.stopScanning();
-  if (commandHandler) commandHandler.stop();
-  if (antiAfk) antiAfk.stop();
-  if (queueHandler) queueHandler.stop();
-  if (queueMonitor) queueMonitor.stop();
-  if (intruderDetector) intruderDetector.stop();
-  if (recruiter) recruiter.stop();
-  if (aura) aura.stop();
+  for (const pearlBot of pearlBots) pearlBot.stop();
   if (chatLogger) chatLogger.close();
   if (discordBot) discordBot.stop().catch(() => {});
-  if (currentBot && !shutdownRequested) {
-    try { currentBot.quit('Graceful shutdown'); } catch {}
-  }
   logger.close();
 }
 
 process.on('SIGINT', () => {
   logger.info('SIGINT received — shutting down');
-  shutdownRequested = true;
   cleanup();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   logger.info('SIGTERM received — shutting down');
-  shutdownRequested = true;
   cleanup();
   process.exit(0);
 });
@@ -298,8 +114,8 @@ process.on('unhandledRejection', (reason) => {
   logger.error(`Unhandled rejection: ${formatErr(reason)}`);
 });
 
-logger.info(`Starting pearl bot — connecting to ${config.bot.host}:${config.bot.port}`);
-createBot();
+logger.info(`Starting pearl bot network — ${pearlBots.length} bot(s): ${pearlBots.map((b) => b.name).join(', ')}`);
+for (const pearlBot of pearlBots) pearlBot.start();
 
 discordBot.start().catch((err) => {
   logger.warn(`Discord bot startup failed: ${err.message}`);

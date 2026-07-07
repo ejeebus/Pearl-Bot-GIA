@@ -20,8 +20,11 @@ class CommandHandler extends EventEmitter {
    * @param {object} trapdoorController - Must have loadPearl(name, block)
    * @param {import('./recruiter')} recruiter - Recruiter instance
    * @param {import('./logger')} logger - Logger instance
+   * @param {object} [options]
+   * @param {import('./network')} [options.network] - BotNetwork coordinator (multi-bot routing)
+   * @param {import('./pearl-bot')} [options.pearlBot] - The PearlBot that owns this handler
    */
-  constructor(bot, whitelist, pearlScanner, trapdoorController, recruiter, logger) {
+  constructor(bot, whitelist, pearlScanner, trapdoorController, recruiter, logger, options = {}) {
     super();
     this.bot = bot;
     this.whitelist = whitelist;
@@ -30,9 +33,24 @@ class CommandHandler extends EventEmitter {
     this.recruiter = recruiter;
     this.logger = logger;
 
+    // Multi-bot coordination. When `network` is null the handler behaves as a
+    // standalone single-bot handler (find on its own scanner, reply itself).
+    this.network = options.network || null;
+    this.pearlBot = options.pearlBot || null;
+
     /** @private */ this._listening = false;
     /** @private */ this._lastChatTime = 0;
     /** @private */ this._minChatInterval = 2000;
+  }
+
+  /**
+   * Whether this handler is the network's single responder for shared replies
+   * (not-found messages, aggregated lists, recruitment). Always true in
+   * single-bot mode.
+   * @private
+   */
+  _isResponder() {
+    return !this.network || this.network.isPrimary(this.pearlBot);
   }
 
   start() {
@@ -73,19 +91,30 @@ class CommandHandler extends EventEmitter {
       return;
     }
 
-    // !recruit — fire recruitment message immediately
+    // !recruit — fire recruitment message immediately.
+    // Only the network responder sends, so multiple bots don't all spam it.
     if (command.target === '__recruit') {
+      if (!this._isResponder()) return;
       this.recruiter.send();
       this._lastChatTime = now;
       this.logger.info(`Recruitment message triggered by ${command.sender}`);
       return;
     }
 
-    // !pearls — list all tracked pearls for debugging
+    // !pearls — list all tracked pearls. The responder aggregates every
+    // chamber's pearls so the requester gets one combined answer.
     if (command.target === '__list') {
-      const known = this.pearlScanner.getKnownPearls();
-      const names = [...known.keys()];
-      const reply = names.length ? `Tracked: ${names.join(', ')}` : 'No pearls tracked';
+      if (!this._isResponder()) return;
+      let reply;
+      if (this.network) {
+        const all = this.network.allKnownPearls();
+        reply = all.length
+          ? `Tracked: ${all.map((p) => `${p.name} (${p.bot})`).join(', ')}`
+          : 'No pearls tracked';
+      } else {
+        const names = [...this.pearlScanner.getKnownPearls().keys()];
+        reply = names.length ? `Tracked: ${names.join(', ')}` : 'No pearls tracked';
+      }
       try { this.bot.chat(reply); } catch (err) { this.logger.error(`Chat send failed: ${err.message}`); }
       this._lastChatTime = now;
       this.logger.info(`Pearl list requested by ${command.sender}: ${reply}`);
@@ -95,6 +124,13 @@ class CommandHandler extends EventEmitter {
     const pearlData = this.pearlScanner.getPearlForPlayer(command.target);
 
     if (!pearlData) {
+      // This bot's chamber doesn't have the pearl. In multi-bot mode, stay
+      // silent if another chamber owns it (that bot will respond), and let
+      // only the responder announce a genuine "not found".
+      if (this.network) {
+        if (this.network.findOwner(command.target)) return;
+        if (!this._isResponder()) return;
+      }
       try { this.bot.chat(`No pearl found for ${command.target}`); } catch (err) { this.logger.error(`Chat send failed: ${err.message}`); }
       this._lastChatTime = now;
       this.logger.info(
