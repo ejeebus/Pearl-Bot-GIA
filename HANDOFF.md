@@ -7,7 +7,7 @@ bot owns the target player's pearl. Second Microsoft account already exists.
 
 ---
 
-## Status: feature-complete on this branch, NOT yet merged to `main`
+## Status: integrated and merged into `main` (commit `dd188ae`)
 
 All code is written, syntax-checked (`node -c`), and functionally smoke-tested with
 fakes (real bot can't run in the dev container — no mineflayer deps / no accounts).
@@ -33,37 +33,32 @@ It has **not** been run against real 2b2t accounts yet.
 
 ---
 
-## ⚠️ CRITICAL: `main` has diverged — integration required before merge
+## ✅ DONE: integrated with `main` and merged (commit `dd188ae`)
 
-Since the merge-base (`5fc95b5`), `main` gained **3 commits this branch does NOT have**:
+Since the merge-base (`5fc95b5`), `main` had gained **3 commits this branch lacked**:
 - `185aa8b` + `bf595cd` — **`modules/aura.js`** (attack nearby hostile mobs; 1.9+ cooldown-aware)
 - `2653931` — **`modules/queue-monitor.js`** (live queue-position counter from the tab footer) + removed the dead chat-based parser from `queue.js`
 
-Both were wired into the **OLD** single-bot `index.js`. Because this branch **rewrote**
-`index.js` into the `PearlBot` architecture, a rebase/merge onto `main` will conflict on
-`index.js`, `config.example.json`, and `README.md`, and **will drop the aura + queue-monitor
-wiring** unless it is re-added to `PearlBot`. Neither module file itself conflicts.
+Both were wired into the OLD single-bot `index.js`. This branch rewrote `index.js` into
+the `PearlBot` architecture, so the merge conflicted on `index.js` and dropped that wiring
+until it was re-added to `PearlBot`. **This has now been done** — the multi-bot work was
+merged into `main` and pushed.
 
-### Integration steps for the next agent
-1. `git rebase origin/main` (or merge). Resolve conflicts:
-   - **`index.js`** → keep THIS branch's version (thin orchestrator). Do **not** re-add aura/queueMonitor here.
-   - **`config.example.json`** → keep the `bots: [...]` shape; fold in `queue.queue_heartbeat_ms` / `queue.queue_stuck_timeout_ms` (from queue-monitor) and any `aura` block.
-   - **`README.md`** → keep both sets of doc additions.
-2. **Wire `queue-monitor` into `modules/pearl-bot.js`** (it's per-connection, pre-spawn):
-   - `const QueueMonitor = require('./queue-monitor');`
-   - In the `PearlBot` constructor: `this.queueMonitor = new QueueMonitor(this.config, this.logger);` (one per bot — each has its own queue).
-   - In `createBot()`, right after `const bot = mineflayer.createBot(opts); this.bot = bot;` → `this.queueMonitor.attach(bot);` (**before** any spawn handler, so it sees the whole queue).
-   - In the `bot.on('spawn', ...)` handler → `this.queueMonitor.onSpawn();`
-   - In `onPreSpawnDisconnect` → `this.queueMonitor.detach();`
-   - In `PearlBot.stop()` → `this.queueMonitor.stop();`
-   - Optional: prefix its logs with the bot name (QueueMonitor takes `logger`; consider passing a tagged logger or adding a name param) so two queues are distinguishable.
-3. **Wire `aura` into `modules/pearl-bot.js`** (it's a per-bot module like the others):
-   - `const Aura = require('./aura');`
-   - Add `this.aura = null;` in the constructor's module-instances block.
-   - In `bindModules()`: stop the old one (`if (this.aura) this.aura.stop();`) alongside the other `stop()` calls, then `this.aura = new Aura(bot, this.config, this.logger);` and `this.aura.start();` with the other `.start()` calls.
-   - In `PearlBot.stop()`: `if (this.aura) this.aura.stop();`
-   - Consider a per-bot `aura.enabled` override (same inherit pattern as anti_afk/queue/intruder/recruiter in `buildBotConfigs`).
-4. `node -c` every touched file; re-run the two scratchpad tests if still available.
+### How the conflicts were resolved (already applied on `main`)
+- **`index.js`** → kept the thin orchestrator; added `aura: inherit(entry, 'aura')` to the
+  per-bot config in `buildBotConfigs()`.
+- **`config.example.json`** / **`README.md`** → git auto-merged cleanly (the `bots: [...]`
+  shape plus `queue.queue_heartbeat_ms` / `queue.queue_stuck_timeout_ms` and the `aura`
+  block all coexist; both doc sets preserved).
+- **`modules/pearl-bot.js`** → re-wired both modules:
+  - `QueueMonitor` — one instance per `PearlBot`, `attach()`ed pre-spawn in `createBot()`,
+    `onSpawn()` in the spawn handler, `detach()` on pre-spawn disconnect, `stop()` in `stop()`.
+  - `Aura` — per-bot module rebound in `bindModules()`; `start()` self-guards on
+    `config.aura.enabled`; stopped in `bindModules()`/`stop()`.
+  - Both log through a per-bot **tagged logger** (`_makeTaggedLogger()`) so two chambers'
+    queue/aura output stays distinguishable in the shared log.
+- Verified with `node -c` on every touched file + a scratchpad lifecycle test exercising
+  `QueueMonitor.attach/onSpawn/detach/stop` and `Aura.start/tick/stop` against a fake bot.
 
 ---
 
