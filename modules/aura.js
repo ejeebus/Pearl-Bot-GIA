@@ -48,12 +48,12 @@ class Aura extends EventEmitter {
 
   start() {
     if (!this.enabled) return;
-    this.bot.on('physicTick', this._onTick);
+    this.bot.on('physicsTick', this._onTick);
     this.logger.info(`Aura started — range: ${this.range}m`);
   }
 
   stop() {
-    this.bot.off('physicTick', this._onTick);
+    this.bot.off('physicsTick', this._onTick);
   }
 
   // Returns attacks/second for the currently held item.
