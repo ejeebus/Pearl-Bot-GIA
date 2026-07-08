@@ -253,6 +253,13 @@ class PearlBot {
 
     bot.on('error', (err) => this.logger.error(this._tag(`Bot error: ${formatErr(err)}`)));
 
+    // Rubber-band detector: the server teleporting the bot back means it
+    // rejected the bot's movement (bot frozen server-side). If these fire after
+    // a pearl request, 2b2t is refusing our walk — the desync we're chasing.
+    bot.on('forcedMove', () => {
+      if (hasSpawned) this.logger.warn(this._tag(`Server repositioned bot to ${bot.entity.position.floored()} (movement rejected / rubber-band)`));
+    });
+
     // If disconnected before spawn (e.g. kicked while queued), reconnect
     // manually since QueueHandler only attaches after spawn. Guard because
     // both 'kicked' and 'end' can fire for the same disconnect.
@@ -274,20 +281,10 @@ class PearlBot {
 
   onBotReady(bot) {
     this.bindModules(bot);
-
-    // Walk briefly after spawning to clear 2b2t's per-session login mute.
-    setTimeout(() => {
-      try {
-        this.logger.info(this._tag('Login-mute walk: moving forward briefly'));
-        bot.setControlState('forward', true);
-        setTimeout(() => {
-          try { bot.setControlState('forward', false); } catch { /* noop */ }
-          this.logger.info(this._tag('Login-mute walk: complete'));
-        }, 1500);
-      } catch (err) {
-        this.logger.warn(this._tag(`Login-mute walk failed: ${err.message}`));
-      }
-    }, 4000);
+    // NOTE: the old "login-mute walk" (a blind forward walk right after spawn)
+    // was removed — this bot's chat is disabled anyway, and moving before the
+    // server has fully accepted the spawn position is a likely trigger for the
+    // client/server position desync that freezes the bot server-side.
   }
 
   installWriteInterceptor(bot) {
