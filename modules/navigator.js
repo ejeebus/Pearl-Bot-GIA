@@ -19,6 +19,7 @@
  */
 
 const { Movements, goals } = require('mineflayer-pathfinder');
+const Vec3 = require('vec3');
 
 const DEFAULT_REACH_RANGE = 3;
 const DEFAULT_HOME_RADIUS = 1;
@@ -48,15 +49,29 @@ class Navigator {
     const m = new Movements(this.bot);
     m.canDig = false; // never break chamber blocks
     m.allow1by1towers = false; // never pillar up
-    m.allowParkour = false; // keep paths simple/safe in tight chambers
+    m.allowParkour = true; // allow jumping 1-block gaps (no block changes) — often needed to reach a walkway
     m.scafoldingBlocks = []; // never place blocks (library's spelling)
     m.canOpenDoors = false; // never toggle trapdoors/doors it walks past
     this.bot.pathfinder.setMovements(m);
     this._movements = m;
   }
 
-  async _goto(x, y, z, range) {
+  async _goto(x, y, z, range, label = 'target') {
     this._ensureMovements();
+    const target = new Vec3(x, y, z);
+    const startDist = this.bot.entity.position.distanceTo(target);
+    this.logger.info(
+      `Navigator: ${label} at (${x}, ${y}, ${z}) — from ${this.bot.entity.position.floored()} ` +
+      `dist=${startDist.toFixed(1)} physics=${this.bot.physicsEnabled}`
+    );
+
+    // Already close enough: skip the pathfinder entirely (avoids empty-path
+    // no-ops and the GoalNear floored-position hang).
+    if (startDist <= range) {
+      this.logger.info(`Navigator: ${label} already within ${range} blocks — no walk needed`);
+      return;
+    }
+
     const goto = this.bot.pathfinder.goto(new goals.GoalNear(x, y, z, range));
     let timer;
     const timeout = new Promise((_, reject) => {
@@ -65,13 +80,24 @@ class Navigator {
     try {
       await Promise.race([goto, timeout]);
     } catch (err) {
-      // Stop the (possibly still-running) walk and swallow the goto's own
-      // rejection so it doesn't surface as an unhandled rejection.
       try { this.bot.pathfinder.setGoal(null); } catch { /* noop */ }
       goto.catch(() => {});
+      this.logger.warn(`Navigator: ${label} pathing FAILED: ${err.name || 'Error'} — ${err.message}`);
       throw err;
     } finally {
       clearTimeout(timer);
+    }
+
+    const endDist = this.bot.entity.position.distanceTo(target);
+    if (endDist > range + 1) {
+      // goto resolved but the bot never actually reached the target — almost
+      // always "no walkable path" (boxed in / gap it can't cross / Movements too strict).
+      this.logger.warn(
+        `Navigator: ${label} — goto returned but bot is still ${endDist.toFixed(1)} blocks away. ` +
+        `No walkable path from its spot to the trapdoor (check the route / walkway).`
+      );
+    } else {
+      this.logger.info(`Navigator: reached ${label} (dist ${endDist.toFixed(1)})`);
     }
   }
 
@@ -82,7 +108,7 @@ class Navigator {
    */
   async goNear(pos, range) {
     const r = range ?? this.config.stasis?.reach_range ?? DEFAULT_REACH_RANGE;
-    await this._goto(pos.x, pos.y, pos.z, r);
+    await this._goto(pos.x, pos.y, pos.z, r, 'trapdoor');
   }
 
   /** Walk back to the chamber center (or a configured `home` spot). */
@@ -90,7 +116,7 @@ class Navigator {
     const home = this.config.stasis?.home ?? this.config.stasis?.chamber_center;
     if (!home) return;
     const r = this.config.stasis?.home_radius ?? DEFAULT_HOME_RADIUS;
-    await this._goto(home.x, home.y, home.z, r);
+    await this._goto(home.x, home.y, home.z, r, 'chamber center');
   }
 }
 

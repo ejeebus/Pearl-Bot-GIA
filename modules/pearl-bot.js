@@ -145,7 +145,17 @@ class PearlBot {
     try { afk?.stop(); } catch { /* noop */ }
     try {
       if (nav) {
-        await nav.goNear(trapdoorBlock.position, reach);
+        // Pathfinder only moves the bot while physics is enabled; 2b2t's config
+        // state can leave it off, so force it on before walking.
+        try { this.bot.physicsEnabled = true; } catch { /* noop */ }
+        try {
+          await nav.goNear(trapdoorBlock.position, reach);
+        } catch (err) {
+          // Navigation failed (no path / timeout) — still attempt the toggle from
+          // wherever the bot is (works if already in reach), so a pathing issue
+          // degrades gracefully instead of doing nothing.
+          this.logger.warn(this._tag(`navigation failed: ${err.message} — toggling from current position`));
+        }
         // activateBlock doesn't auto-look; face the trapdoor so 2b2t accepts
         // the interaction as in-reach and correctly aimed.
         await this.bot.lookAt(trapdoorBlock.position.offset(0.5, 0.5, 0.5), true);
