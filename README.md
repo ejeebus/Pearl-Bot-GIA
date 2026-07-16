@@ -16,6 +16,7 @@
 - **Intruder Detection** — Alerts and optionally disconnects when non-whitelisted players enter render distance
 - **Recruiter** — Sends periodic recruitment messages in global chat
 - **Chat Logging** — Records all server chat to a local SQLite database for later review/search, with optional keyword flagging
+- **GIA Map Reporter** — Optionally pushes each in-world bot's position and nearby-player sightings to the [gia2b2t.com](https://gia2b2t.com) live operations map (fire-and-forget; never disturbs the bots)
 - **Logging** — Dual console + file logging with configurable verbosity
 
 ---
@@ -240,6 +241,36 @@ node scripts/search-chat.js --contains "give me"
 node scripts/search-chat.js --flagged
 node scripts/search-chat.js --sender Notch --contains diamond --limit 50
 ```
+
+#### GIA Map Reporter
+
+```json
+"gia_reporter": {
+  "enabled": true,
+  "interval_seconds": 7,
+  "positions": true,
+  "sightings": true,
+  "report_whitelisted": false
+}
+```
+
+Pushes live telemetry to the GIA website's operations map at
+[gia2b2t.com/map](https://gia2b2t.com/map). On each interval it reports, for
+every **in-world** bot, a position fix (`positions`) and every non-fleet player
+in render distance as a **sighting** (`sightings`). Whitelisted (friendly)
+players are skipped unless `report_whitelisted` is `true`. Reporting is entirely
+fire-and-forget — a slow or down website can never disturb the bots.
+
+Credentials come from the environment (never `config.json`):
+
+```env
+GIA_INGEST_URL=https://gia2b2t.com
+GIA_INGEST_TOKEN=<must equal the website's BOT_INGEST_TOKEN>
+```
+
+If either is unset the reporter stays disabled. The token must match the
+website's `BOT_INGEST_TOKEN` and be different from any admin token — treat it
+like a password and keep it out of git.
 
 #### Logging
 

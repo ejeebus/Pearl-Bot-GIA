@@ -6,6 +6,7 @@ const DiscordBot = require('./modules/discord');
 const ChatLogger = require('./modules/chat-logger');
 const BotNetwork = require('./modules/network');
 const PearlBot = require('./modules/pearl-bot');
+const GiaReporter = require('./modules/gia-reporter');
 
 let config;
 try {
@@ -91,8 +92,14 @@ const pearlBots = botConfigs.map((botConfig) => {
   return pearlBot;
 });
 
+// Pushes live positions + player sightings to the GIA website map (opt-in via
+// GIA_INGEST_URL/GIA_INGEST_TOKEN). Reads the whole network each tick; fully
+// fire-and-forget so it can never disturb the bots.
+const giaReporter = new GiaReporter(config, network, whitelist, logger);
+
 function cleanup() {
   for (const pearlBot of pearlBots) pearlBot.stop();
+  if (giaReporter) giaReporter.stop();
   if (chatLogger) chatLogger.close();
   if (discordBot) discordBot.stop().catch(() => {});
   logger.close();
@@ -116,6 +123,8 @@ process.on('unhandledRejection', (reason) => {
 
 logger.info(`Starting pearl bot network — ${pearlBots.length} bot(s): ${pearlBots.map((b) => b.name).join(', ')}`);
 for (const pearlBot of pearlBots) pearlBot.start();
+
+giaReporter.start();
 
 discordBot.start().catch((err) => {
   logger.warn(`Discord bot startup failed: ${err.message}`);
