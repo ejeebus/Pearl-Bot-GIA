@@ -84,6 +84,13 @@
     "enabled": true,
     "range": 5
   },
+  "gia_reporter": {
+    "enabled": true,
+    "interval_seconds": 7,
+    "positions": true,
+    "sightings": true,
+    "report_whitelisted": false
+  },
   "logging": {
     "level": "info",
     "log_to_file": true,
