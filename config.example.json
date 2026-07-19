@@ -84,6 +84,16 @@
     "enabled": true,
     "range": 5
   },
+  "rubber_band": {
+    "enabled": true,
+    "burst_threshold": 5,
+    "burst_window_ms": 3000,
+    "summary_interval_ms": 30000,
+    "recover_quiet_ms": 5000,
+    "auto_reconnect": true,
+    "reconnect_after_ms": 180000,
+    "reconnect_cooldown_ms": 600000
+  },
   "logging": {
     "level": "info",
     "log_to_file": true,

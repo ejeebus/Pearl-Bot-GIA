@@ -25,6 +25,7 @@ const Recruiter = require('./recruiter');
 const QueueMonitor = require('./queue-monitor');
 const Aura = require('./aura');
 const Navigator = require('./navigator');
+const RubberBandGuard = require('./rubber-band-guard');
 const { pathfinder } = require('mineflayer-pathfinder');
 
 function formatErr(err) {
@@ -66,6 +67,7 @@ class PearlBot {
     this.recruiter = null;
     this.aura = null;
     this.navigator = null;
+    this.rubberBandGuard = null;
 
     // Serializes pearl loads so concurrent chat/Discord requests don't fight
     // the pathfinder (a second goto mid-path rejects the first with GoalChanged).
@@ -141,6 +143,16 @@ class PearlBot {
     const reach = this.config.stasis?.reach_range ?? 3;
     let success = false;
 
+    // If the bot is currently rubber-banding, it's frozen server-side and can't
+    // walk to the trapdoor — attempting a load would just fight the server and
+    // fail silently. Bail early with a clear reason; the guard is already
+    // working to re-sync (and will reconnect if it has to), so a later request
+    // will succeed.
+    if (this.rubberBandGuard?.isDesynced()) {
+      this.logger.warn(this._tag(`Cannot load ${playerName}'s pearl: bot is rubber-banding (desynced) — try again once it re-syncs`));
+      return false;
+    }
+
     // Suspend anti-AFK so its sneak/jump/look don't fight the pathfinder.
     try { afk?.stop(); } catch { /* noop */ }
     try {
@@ -191,6 +203,7 @@ class PearlBot {
     if (this.intruderDetector) this.intruderDetector.stop();
     if (this.recruiter) this.recruiter.stop();
     if (this.aura) this.aura.stop();
+    if (this.rubberBandGuard) this.rubberBandGuard.stop();
     if (this.queueMonitor) this.queueMonitor.stop();
     if (this.bot) {
       try { this.bot.quit('Graceful shutdown'); } catch { /* already gone */ }
@@ -252,13 +265,6 @@ class PearlBot {
     });
 
     bot.on('error', (err) => this.logger.error(this._tag(`Bot error: ${formatErr(err)}`)));
-
-    // Rubber-band detector: the server teleporting the bot back means it
-    // rejected the bot's movement (bot frozen server-side). If these fire after
-    // a pearl request, 2b2t is refusing our walk — the desync we're chasing.
-    bot.on('forcedMove', () => {
-      if (hasSpawned) this.logger.warn(this._tag(`Server repositioned bot to ${bot.entity.position.floored()} (movement rejected / rubber-band)`));
-    });
 
     // If disconnected before spawn (e.g. kicked while queued), reconnect
     // manually since QueueHandler only attaches after spawn. Guard because
@@ -330,6 +336,7 @@ class PearlBot {
     if (this.intruderDetector) this.intruderDetector.stop();
     if (this.recruiter) this.recruiter.stop();
     if (this.aura) this.aura.stop();
+    if (this.rubberBandGuard) this.rubberBandGuard.stop();
 
     this.pearlScanner = new PearlScanner(bot, this.config, this.logger);
     this.trapdoorController = new TrapdoorController(bot, this.logger);
@@ -343,10 +350,24 @@ class PearlBot {
     this.intruderDetector = new IntruderDetector(bot, this.whitelist, this.logger);
     this.aura = new Aura(bot, this.config, this._taggedLogger);
 
+    // Rubber-band guard: throttles the reposition log and, on sustained
+    // rubber-banding, pauses movement to break the desync loop (and reconnects
+    // if it persists). Reconnect goes through bot.quit() so QueueHandler's
+    // normal reconnect path handles the re-queue.
+    this.rubberBandGuard = new RubberBandGuard(
+      bot, this.config, this._taggedLogger,
+      (reason) => { try { bot.quit(reason); } catch { /* already gone */ } }
+    );
+    // While desynced, stop anti-AFK so its toggles/patrol don't fire against a
+    // stale server-side position; resume it once movement is re-enabled.
+    this.rubberBandGuard.on('desync', () => { try { this.antiAfk?.stop(); } catch { /* noop */ } });
+    this.rubberBandGuard.on('resync', () => { try { this.antiAfk?.start(); } catch { /* noop */ } });
+
     this.pearlScanner.startScanning();
     this.commandHandler.start();
     this.antiAfk.start();
     this.aura.start(); // Aura.start() self-guards on config.aura.enabled
+    this.rubberBandGuard.start(); // self-guards on config.rubber_band.enabled
     if (this.config.recruiter?.enabled !== false) this.recruiter.start();
 
     if (this.config.intruder?.enabled !== false) {

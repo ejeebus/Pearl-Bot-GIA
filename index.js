@@ -63,6 +63,7 @@ function buildBotConfigs(cfg) {
     intruder: inherit(entry, 'intruder'),
     recruiter: inherit(entry, 'recruiter'),
     aura: inherit(entry, 'aura'),
+    rubber_band: inherit(entry, 'rubber_band'),
     logging: cfg.logging,
     discord: cfg.discord,
     whitelist: cfg.whitelist,

@@ -199,6 +199,52 @@ observed movement rate, and an ETA estimated from that rate (falling back to
 | `queue_heartbeat_ms` | How often to re-log the position when it hasn't changed, so the log shows the bot is alive during static stretches (default 60s; `0` disables). |
 | `queue_stuck_timeout_ms` | If the position hasn't advanced for this long, log a WARN — usually a 2b2t restart or a frozen queue (default 15m; `0` disables). |
 
+#### Rubber-band guard
+
+2b2t occasionally rejects the bot's movement and teleports it back on every tick
+("rubber-banding"), which floods the log with one `movement rejected / rubber-band`
+line ~20×/sec and freezes the bot server-side so it can't walk to a trapdoor to
+pull a pearl. This most often starts right after a **2b2t version update**, when
+the client `version` pinned in `config.json` no longer matches the server's
+protocol (the tell-tale sign is a reposition target with a sane Y but nonsensical
+X/Z).
+
+```json
+"rubber_band": {
+  "enabled": true,
+  "burst_threshold": 5,
+  "burst_window_ms": 3000,
+  "summary_interval_ms": 30000,
+  "recover_quiet_ms": 5000,
+  "auto_reconnect": true,
+  "reconnect_after_ms": 180000,
+  "reconnect_cooldown_ms": 600000
+}
+```
+
+When active, the guard throttles the warning (one line, then a periodic
+`N further reposition(s)…` summary instead of one per tick) and, once
+rubber-banding is sustained (`burst_threshold` events within `burst_window_ms`),
+pauses movement — disabling physics and clearing control states — to stop the bot
+fighting the server. It re-enables movement after `recover_quiet_ms` of quiet, or,
+if the desync persists past `reconnect_after_ms`, reconnects once (gated by
+`reconnect_cooldown_ms`) to re-establish position sync.
+
+> **The real cure** is to set each bot's `version` in `config.json` to 2b2t's
+> current native Minecraft version after an update. The guard keeps the bot stable
+> and self-healing in the meantime, but it can't make a mismatched protocol pull
+> pearls reliably — a correctly pinned version can.
+
+| Key | Meaning |
+|-----|---------|
+| `enabled` | Turn the guard on/off (default on). |
+| `burst_threshold` / `burst_window_ms` | How many repositions within the window count as a sustained desync (default 5 in 3s). |
+| `summary_interval_ms` | How often to log the coalesced suppressed-count summary (default 30s). |
+| `recover_quiet_ms` | Quiet time with no repositions before movement is re-enabled (default 5s). |
+| `auto_reconnect` | Whether to reconnect when a desync won't clear (default on). |
+| `reconnect_after_ms` | How long a desync must persist before reconnecting (default 3m). |
+| `reconnect_cooldown_ms` | Minimum time between desync-triggered reconnects, so it can't loop (default 10m). |
+
 #### Intruder Detection
 
 ```json
@@ -331,6 +377,7 @@ Pearl-Bot-GIA/
     ├── discord.js        # Discord bot integration
     ├── anti-afk.js       # AFK prevention
     ├── queue.js          # 2b2t queue + auto-reconnect
+    ├── rubber-band-guard.js # Detects/dampens server movement rejection (rubber-banding)
     ├── intruder.js       # Intruder detection and alerts
     ├── recruiter.js      # Periodic recruitment messages
     ├── whitelist.js      # Whitelist management
